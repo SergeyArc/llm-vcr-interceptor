@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TypeAlias
 
 from lhi.session import AddRecords, AddSession, RemoveRecords
 
-EditOperation: TypeAlias = AddSession | AddRecords | RemoveRecords
+type EditOperation = AddSession | AddRecords | RemoveRecords
 
 
 @dataclass(frozen=True, slots=True)

@@ -4,11 +4,12 @@ import atexit
 import os
 import re
 import tempfile
-from functools import partial
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from functools import partial
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Protocol
 
 import vcr
 import yaml
@@ -17,6 +18,11 @@ from lhi.scenario import ScenarioRow
 from lhi.session import AddRecords, AddSession, RemoveRecords
 
 INVOCATION_TAG_HEADER = "x-invocation-tag"
+
+
+class _AsyncTextGenerator(Protocol):
+    async def generate(self, prompt: str) -> str: ...
+
 
 _current_tag: ContextVar[str | None] = ContextVar("lhi_tag", default=None)
 
@@ -319,7 +325,7 @@ class LHIInterceptor:
             if self._virtual_cassette_path:
                 self._sync_new_interactions_to_primary(previous_count)
 
-    async def generate(self, service: Any, prompt: str, invocation_tag: str) -> str:
+    async def generate(self, service: _AsyncTextGenerator, prompt: str, invocation_tag: str) -> str:
         token = _current_tag.set(invocation_tag)
         try:
             return await service.generate(prompt)
