@@ -1,17 +1,41 @@
-import os
-from dotenv import load_dotenv
-from llm_actor import LLMActorService, LLMActorSettings
+from __future__ import annotations
 
-def get_service() -> LLMActorService:
+import os
+from types import TracebackType
+
+from dotenv import load_dotenv
+from openai import AsyncOpenAI
+
+
+class OpenAITextGenerator:
+    def __init__(self, client: AsyncOpenAI, model: str) -> None:
+        self._client = client
+        self._model = model
+
+    async def generate(self, prompt: str) -> str:
+        response = await self._client.chat.completions.create(
+            model=self._model,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.choices[0].message.content or ""
+
+    async def __aenter__(self) -> OpenAITextGenerator:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        await self._client.close()
+
+
+def get_service() -> OpenAITextGenerator:
     load_dotenv()
-    api_key = os.getenv("LLM_API_KEY")
-    base_url = os.getenv("LLM_BASE_URL")
-    model = os.getenv("LLM_MODEL_NAME")
-    max_concurrency = int(os.getenv("MAX_CONCURRENCY", "2"))
-    
-    return LLMActorService.from_openai_compatible(
-        api_key=api_key,
-        model=model,
-        base_url=base_url,
-        settings=LLMActorSettings(LLM_NUM_ACTORS=max_concurrency),
+    client = AsyncOpenAI(
+        api_key=os.environ.get("LLM_API_KEY"),
+        base_url=os.environ.get("LLM_BASE_URL"),
     )
+    model = os.environ.get("LLM_MODEL_NAME", "gpt-4o-mini")
+    return OpenAITextGenerator(client=client, model=model)

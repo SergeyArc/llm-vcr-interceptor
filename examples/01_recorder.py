@@ -1,6 +1,8 @@
 import asyncio
-from lhi import LHIInterceptor
+
 from examples.utils import get_service
+from lhi import LHIInterceptor
+
 
 async def run_recorder() -> None:
     """Mode: Recorder (record_mode='all')
@@ -9,7 +11,7 @@ async def run_recorder() -> None:
     service = get_service()
     interceptor = LHIInterceptor(
         sessions={0: "session_ recorder.yaml"},
-        record_mode="all", # Force recording of all requests
+        record_mode="all",  # Force recording of all requests
     )
 
     async with service:
@@ -17,6 +19,7 @@ async def run_recorder() -> None:
             print("--- Recording calls to session_recorder.yaml ---")
             resp = await interceptor.generate(service, "What is 2+2?", "math_q1")
             print(f"Response: {resp}")
+
 
 if __name__ == "__main__":
     asyncio.run(run_recorder())

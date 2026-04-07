@@ -1,32 +1,19 @@
 from __future__ import annotations
 
 import asyncio
-import os
 
-from dotenv import load_dotenv
-from llm_actor import LLMActorService, LLMActorSettings
-
-from lhi import AddRecords, AddSession, LHIInterceptor, RemoveRecords, ScenarioRow
+from examples.utils import get_service
+from lhi import LHIInterceptor, ScenarioRow
 
 
 async def main() -> None:
-    load_dotenv()
-    api_key = os.environ.get("LLM_API_KEY")
-    base_url = os.environ.get("LLM_BASE_URL")
-    model = os.environ.get("LLM_MODEL_NAME")
-    max_concurrency = os.environ.get("MAX_CONCURRENCY")
-
-    service = LLMActorService.from_openai_compatible(
-        api_key=api_key,
-        model=model,
-        base_url=base_url,
-        settings=LLMActorSettings(LLM_NUM_ACTORS=max_concurrency),
+    service = get_service()
+    scenario = ScenarioRow(
+        name="freeze_actor_model",
+        invocation_patch_regexps=[r"^actor_model_(def|example)$"],
     )
-
-    from lhi.trial.registry import get_scenario, SESSIONS
-    scenario = get_scenario("freeze_actor_model")
     interceptor = LHIInterceptor(
-        sessions=SESSIONS,
+        sessions={0: "session_0.yaml"},
         scenario=scenario,
     )
 
