@@ -5,7 +5,10 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
-    "llm-actor[openai]>=0.1.0",
+    "llm-actor[openai]>=0.2.0",
     "pip>=26.0.1",
     "vcrpy>=8.1.1",
 ]
+
+[tool.uv.sources]
+llm-actor = { path = "../concurrent-worker-pool/llm_actor", editable = true }

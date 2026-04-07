@@ -3,22 +3,10 @@ from __future__ import annotations
 import asyncio
 import os
 
-import vcr
 from dotenv import load_dotenv
 from llm_actor import LLMActorService, LLMActorSettings
 
-
-def _build_vcr() -> vcr.VCR:
-    return vcr.VCR(
-        cassette_library_dir=os.environ.get("VCR_CASSETTES_DIR", "cassettes"),
-        record_mode=os.environ.get("VCR_RECORD_MODE", "none"),
-        filter_headers=(
-            "authorization",
-            "api-key",
-            "x-api-key",
-        ),
-        match_on=("method", "scheme", "host", "port", "path", "query"),
-    )
+from lhi import AddSession, LHIInterceptor, ScenarioRow
 
 
 async def main() -> None:
@@ -35,19 +23,32 @@ async def main() -> None:
         settings=LLMActorSettings(LLM_NUM_ACTORS=max_concurrency),
     )
 
-    vcr_instance = _build_vcr()
-    cassette_name = os.environ.get("VCR_CASSETTE", "llm_generate.yaml")
+    scenario = ScenarioRow(
+        name="freeze_actor_model",
+        invocation_patch_regexps=[r".*actor_model.*"],
+        edits=(AddSession(session_id=0),),
+    )
+    interceptor = LHIInterceptor(
+        sessions={0: "session_0.yaml"},
+        scenario=scenario,
+    )
 
-    with vcr_instance.use_cassette(cassette_name):
+    with interceptor.use_cassette():
         async with service:
-            first_response = await service.generate("What is the Actor Model in one sentence?")
-            print(f"Response: {first_response}\n")
-
-            second_response = await service.generate(
-                f'Given this summary: "{first_response}"\n'
-                "Give one concrete software system that applies the actor model, in one short phrase."
+            first_response, second_response = await asyncio.gather(
+                interceptor.generate(
+                    service,
+                    "What is the Actor Model in one sentence?",
+                    "actor_model_def",
+                ),
+                interceptor.generate(
+                    service,
+                    "Name one language that uses the Actor Model.",
+                    "actor_model_example",
+                ),
             )
-            print(f"Follow-up: {second_response}\n")
+            print(f"Response 1: {first_response}\n")
+            print(f"Response 2: {second_response}\n")
 
 
 if __name__ == "__main__":
