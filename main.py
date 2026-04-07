@@ -23,17 +23,10 @@ async def main() -> None:
         settings=LLMActorSettings(LLM_NUM_ACTORS=max_concurrency),
     )
 
-    scenario = ScenarioRow(
-        name="freeze_actor_model",
-        invocation_patch_regexps=[r".*actor_model.*"],
-        edits=(
-            AddSession(session_id=0),
-            AddRecords(session_id=0, tags=("actor_model_def",)),
-            RemoveRecords(tags=("actor_model_example",)),
-        ),
-    )
+    from lhi.trial.registry import get_scenario, SESSIONS
+    scenario = get_scenario("freeze_actor_model")
     interceptor = LHIInterceptor(
-        sessions={0: "session_0.yaml"},
+        sessions=SESSIONS,
         scenario=scenario,
     )
 
