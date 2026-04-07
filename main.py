@@ -6,7 +6,7 @@ import os
 from dotenv import load_dotenv
 from llm_actor import LLMActorService, LLMActorSettings
 
-from lhi import AddSession, LHIInterceptor, ScenarioRow
+from lhi import AddRecords, AddSession, LHIInterceptor, RemoveRecords, ScenarioRow
 
 
 async def main() -> None:
@@ -26,7 +26,11 @@ async def main() -> None:
     scenario = ScenarioRow(
         name="freeze_actor_model",
         invocation_patch_regexps=[r".*actor_model.*"],
-        edits=(AddSession(session_id=0),),
+        edits=(
+            AddSession(session_id=0),
+            AddRecords(session_id=0, tags=("actor_model_def",)),
+            RemoveRecords(tags=("actor_model_example",)),
+        ),
     )
     interceptor = LHIInterceptor(
         sessions={0: "session_0.yaml"},

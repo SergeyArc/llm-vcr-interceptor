@@ -6,12 +6,14 @@ from lhi.interceptor import (
     get_current_invocation_tag,
 )
 from lhi.scenario import ScenarioRow
-from lhi.session import AddSession, Session
+from lhi.session import AddRecords, AddSession, RemoveRecords, Session
 
 __all__ = [
+    "AddRecords",
     "AddSession",
     "INVOCATION_TAG_HEADER",
     "LHIInterceptor",
+    "RemoveRecords",
     "ScenarioRow",
     "Session",
     "get_current_invocation_tag",

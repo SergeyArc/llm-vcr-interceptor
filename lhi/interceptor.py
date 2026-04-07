@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import atexit
 import os
 import re
+import tempfile
+from functools import partial
 from contextlib import contextmanager
 from contextvars import ContextVar
+from pathlib import Path
 from typing import Any, Iterator
 
 import vcr
+import yaml
 
 from lhi.scenario import ScenarioRow
+from lhi.session import AddRecords, AddSession, RemoveRecords
 
 INVOCATION_TAG_HEADER = "x-invocation-tag"
 
@@ -27,6 +33,146 @@ def _header_first(request: Any, name: str) -> str:
     if isinstance(value, list):
         return value[0] if value else ""
     return str(value)
+
+
+def _invocation_tag_from_interaction(interaction: dict[str, Any]) -> str:
+    headers = interaction.get("request", {}).get("headers") or {}
+    for header_name, raw in headers.items():
+        if str(header_name).lower() == INVOCATION_TAG_HEADER.lower():
+            if isinstance(raw, list):
+                return str(raw[0]) if raw else ""
+            return str(raw)
+    return ""
+
+
+def _tag_matches_selector(invocation_tag: str, selector: str) -> bool:
+    if invocation_tag == selector:
+        return True
+    try:
+        return re.fullmatch(selector, invocation_tag) is not None
+    except re.error:
+        return False
+
+
+def _interaction_matches_any_tag(interaction: dict[str, Any], tags: tuple[str, ...]) -> bool:
+    stored = _invocation_tag_from_interaction(interaction)
+    if not stored:
+        return False
+    return any(_tag_matches_selector(stored, pattern) for pattern in tags)
+
+
+def _collect_remove_patterns(scenario: ScenarioRow) -> frozenset[str]:
+    patterns: list[str] = []
+    for edit in scenario.edits:
+        if isinstance(edit, RemoveRecords):
+            patterns.extend(edit.tags)
+    return frozenset(patterns)
+
+
+def _needs_virtual_merge(scenario: ScenarioRow | None) -> bool:
+    if scenario is None:
+        return False
+    return any(isinstance(e, (AddSession, AddRecords, RemoveRecords)) for e in scenario.edits)
+
+
+def _resolve_primary_session_id(
+    scenario: ScenarioRow | None,
+    sessions: dict[int, str],
+) -> int:
+    if scenario and scenario.edits:
+        for edit in scenario.edits:
+            if isinstance(edit, AddSession):
+                return edit.session_id
+            if isinstance(edit, AddRecords):
+                return edit.session_id
+    if sessions:
+        return min(sessions.keys())
+    msg = "sessions пуст: нечего воспроизводить"
+    raise ValueError(msg)
+
+
+def _merge_interactions_from_edits(
+    scenario: ScenarioRow,
+    sessions: dict[int, str],
+    base_library_dir: str,
+    primary_session_id: int,
+) -> list[dict[str, Any]]:
+    merged_by_tag: dict[str, dict[str, Any]] = {}
+    primary_path = Path(base_library_dir) / sessions[primary_session_id]
+    primary_doc = _load_cassette_document(primary_path)
+    for interaction in primary_doc.get("interactions") or []:
+        tag = _invocation_tag_from_interaction(interaction)
+        if tag:
+            merged_by_tag[tag] = interaction
+
+    for edit in scenario.edits:
+        if isinstance(edit, RemoveRecords):
+            continue
+        if isinstance(edit, AddSession):
+            path = Path(base_library_dir) / sessions[edit.session_id]
+            doc = _load_cassette_document(path)
+            batch = list(doc.get("interactions") or [])
+        elif isinstance(edit, AddRecords):
+            path = Path(base_library_dir) / sessions[edit.session_id]
+            doc = _load_cassette_document(path)
+            raw = doc.get("interactions") or []
+            batch = [i for i in raw if _interaction_matches_any_tag(i, edit.tags)]
+        else:
+            continue
+        for interaction in batch:
+            tag = _invocation_tag_from_interaction(interaction)
+            if tag:
+                merged_by_tag[tag] = interaction
+
+    remove_patterns = _collect_remove_patterns(scenario)
+    if remove_patterns:
+        for tag in list(merged_by_tag.keys()):
+            if any(_tag_matches_selector(tag, pattern) for pattern in remove_patterns):
+                del merged_by_tag[tag]
+
+    return list(merged_by_tag.values())
+
+
+def _load_cassette_document(path: Path) -> dict[str, Any]:
+    text = path.read_text(encoding="utf-8")
+    loaded = yaml.safe_load(text)
+    if not isinstance(loaded, dict):
+        msg = f"Некорректный YAML кассеты: {path}"
+        raise ValueError(msg)
+    return loaded
+
+
+def _write_cassette_document(path: Path, interactions: list[dict[str, Any]]) -> None:
+    payload: dict[str, Any] = {"interactions": interactions, "version": 1}
+    path.write_text(yaml.safe_dump(payload, default_flow_style=False, allow_unicode=True), encoding="utf-8")
+
+
+def _build_virtual_cassette_file(
+    scenario: ScenarioRow,
+    sessions: dict[int, str],
+    base_library_dir: str,
+    primary_session_id: int,
+) -> str:
+    interactions = _merge_interactions_from_edits(
+        scenario,
+        sessions,
+        base_library_dir,
+        primary_session_id,
+    )
+    handle = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False, encoding="utf-8")
+    try:
+        yaml.safe_dump(
+            {"interactions": interactions, "version": 1},
+            handle,
+            default_flow_style=False,
+            allow_unicode=True,
+        )
+        handle.close()
+    except Exception:
+        handle.close()
+        Path(handle.name).unlink(missing_ok=True)
+        raise
+    return handle.name
 
 
 def _make_invocation_tag_matcher(scenario: ScenarioRow | None) -> Any:
@@ -68,23 +214,34 @@ class LHIInterceptor:
     ) -> None:
         self._sessions = dict(sessions)
         self._scenario = scenario
-        self._cassette_library_dir = cassette_library_dir or os.environ.get(
+        self._base_library_dir = cassette_library_dir or os.environ.get(
             "VCR_CASSETTES_DIR",
             "cassettes",
         )
         self._record_mode = record_mode or os.environ.get("VCR_RECORD_MODE", "new_episodes")
-        self._vcr = self._build_vcr()
-        self._cassette_name = self._resolve_cassette_name()
+        self._primary_session_id = _resolve_primary_session_id(scenario, self._sessions)
 
-    def _resolve_cassette_name(self) -> str:
-        if self._scenario is not None and self._scenario.edits:
-            primary = self._scenario.edits[0].session_id
-        else:
-            primary = min(self._sessions.keys(), default=0)
-        if primary not in self._sessions:
-            msg = f"Нет пути кассеты для session_id={primary}"
+        if self._primary_session_id not in self._sessions:
+            msg = f"Нет пути кассеты для session_id={self._primary_session_id}"
             raise KeyError(msg)
-        return self._sessions[primary]
+
+        self._virtual_cassette_path: str | None = None
+        if scenario is not None and _needs_virtual_merge(scenario):
+            self._virtual_cassette_path = _build_virtual_cassette_file(
+                scenario,
+                self._sessions,
+                self._base_library_dir,
+                self._primary_session_id,
+            )
+            virtual_path = Path(self._virtual_cassette_path)
+            atexit.register(partial(virtual_path.unlink, missing_ok=True))
+            self._cassette_library_dir = str(virtual_path.parent)
+            self._cassette_name = virtual_path.name
+        else:
+            self._cassette_library_dir = self._base_library_dir
+            self._cassette_name = self._sessions[self._primary_session_id]
+
+        self._vcr = self._build_vcr()
 
     def _build_vcr(self) -> vcr.VCR:
         instance = vcr.VCR(
@@ -106,7 +263,10 @@ class LHIInterceptor:
                 "lhi_invocation_tag",
             ),
         )
-        instance.register_matcher("lhi_invocation_tag", _make_invocation_tag_matcher(self._scenario))
+        instance.register_matcher(
+            "lhi_invocation_tag",
+            _make_invocation_tag_matcher(self._scenario),
+        )
         return instance
 
     @property
@@ -117,10 +277,47 @@ class LHIInterceptor:
     def cassette_name(self) -> str:
         return self._cassette_name
 
+    def _sync_new_interactions_to_primary(self, previous_count: int) -> None:
+        if not self._virtual_cassette_path:
+            return
+        virtual_path = Path(self._virtual_cassette_path)
+        merged_after = _load_cassette_document(virtual_path)
+        interactions_after = list(merged_after.get("interactions") or [])
+        new_slice = interactions_after[previous_count:]
+        if not new_slice:
+            return
+        primary_rel = self._sessions[self._primary_session_id]
+        primary_path = Path(self._base_library_dir) / primary_rel
+        primary_doc = _load_cassette_document(primary_path)
+        primary_interactions = list(primary_doc.get("interactions") or [])
+        primary_by_tag: dict[str, dict[str, Any]] = {}
+        primary_untagged: list[dict[str, Any]] = []
+        for item in primary_interactions:
+            tag = _invocation_tag_from_interaction(item)
+            if tag:
+                primary_by_tag[tag] = item
+            else:
+                primary_untagged.append(item)
+        for item in new_slice:
+            tag = _invocation_tag_from_interaction(item)
+            if tag:
+                primary_by_tag[tag] = item
+        final_interactions = primary_untagged + list(primary_by_tag.values())
+        _write_cassette_document(primary_path, final_interactions)
+
     @contextmanager
     def use_cassette(self) -> Iterator[None]:
-        with self._vcr.use_cassette(self._cassette_name):
-            yield
+        previous_count = 0
+        if self._virtual_cassette_path:
+            previous_count = len(
+                _load_cassette_document(Path(self._virtual_cassette_path)).get("interactions") or [],
+            )
+        try:
+            with self._vcr.use_cassette(self._cassette_name):
+                yield
+        finally:
+            if self._virtual_cassette_path:
+                self._sync_new_interactions_to_primary(previous_count)
 
     async def generate(self, service: Any, prompt: str, invocation_tag: str) -> str:
         token = _current_tag.set(invocation_tag)
