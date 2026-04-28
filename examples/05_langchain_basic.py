@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from lhi import LHIInterceptor, invocation_context
 
 
-def run_langchain_level_a() -> None:
+def run_langchain_basic() -> None:
     """Wrap a LangChain call with the existing LHI cassette boundary."""
     try:
         from langchain_core.messages import HumanMessage
@@ -35,4 +35,4 @@ def run_langchain_level_a() -> None:
 
 
 if __name__ == "__main__":
-    run_langchain_level_a()
+    run_langchain_basic()

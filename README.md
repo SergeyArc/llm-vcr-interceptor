@@ -330,7 +330,7 @@ uv run python examples/03_hybrid.py
 uv run python examples/04_partial_replayer.py
 
 # LangChain integration through invocation_context
-uv run python examples/05_langchain_level_a.py
+uv run python examples/05_langchain_basic.py
 ```
 
 ---
