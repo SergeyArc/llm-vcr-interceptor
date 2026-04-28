@@ -3,25 +3,56 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "vcr-py-test"
-version = "0.1.0"
-description = "Add your description here"
+name = "llm-vcr-interceptor"
+dynamic = ["version"]
+description = "Record, replay, and patch LLM HTTP interactions with invocation-tag-aware VCR sessions."
 readme = "README.md"
-requires-python = ">=3.13,<3.14"
+requires-python = ">=3.12,<4.0"
+authors = [
+    { name = "LLM VCR Interceptor contributors" },
+]
+license = { text = "MIT" }
+keywords = ["llm", "vcr", "testing", "replay", "openai", "http"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Typing :: Typed",
+]
 dependencies = [
     "openai>=1.0.0",
-    "pip>=26.0.1",
     "pyyaml>=6.0.3",
     "vcrpy>=8.1.1",
 ]
 
+[project.urls]
+Homepage = "https://github.com/duga/vcr_py_test"
+Repository = "https://github.com/duga/vcr_py_test"
+Issues = "https://github.com/duga/vcr_py_test/issues"
+
 [project.optional-dependencies]
 dev = [
+    "build>=1.2.2.post1",
     "mypy>=1.15",
     "pytest>=8.3",
     "pytest-asyncio>=0.25",
     "ruff>=0.9",
+    "twine>=6.1.0",
     "types-PyYAML>=6.0",
+]
+
+[tool.hatch.version]
+path = "lhi/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/lhi",
+    "/README.md",
+    "/LICENSE",
+    "/pyproject.toml",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -29,14 +60,14 @@ packages = ["lhi"]
 
 [tool.ruff]
 line-length = 120
-target-version = "py313"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ANN"]
 ignore = ["ANN401"]
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.12"
 strict = true
 files = ["lhi"]
 

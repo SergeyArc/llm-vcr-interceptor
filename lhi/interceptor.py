@@ -5,10 +5,9 @@ import logging
 import os
 import re
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -17,9 +16,17 @@ import yaml
 
 from lhi.context import get_current_invocation_tag
 from lhi.scenario import ScenarioRow
-from lhi.session import AddRecords, AddSession, RemoveRecords
+from lhi.session import AddRecords, AddSession, RemoveRecords, Session
 
 INVOCATION_TAG_HEADER = "x-invocation-tag"
+_virtual_cassette_paths: set[Path] = set()
+_virtual_cleanup_registered = False
+
+
+def _cleanup_virtual_cassettes() -> None:
+    for path in tuple(_virtual_cassette_paths):
+        path.unlink(missing_ok=True)
+    _virtual_cassette_paths.clear()
 
 
 def _header_first(request: Any, name: str) -> str:
@@ -84,8 +91,14 @@ def _resolve_primary_session_id(
                 return edit.session_id
     if sessions:
         return min(sessions.keys())
-    msg = "sessions пуст: нечего воспроизводить"
+    msg = "sessions is empty: nothing to replay"
     raise ValueError(msg)
+
+
+def _normalize_sessions(sessions: Mapping[int, str] | Sequence[Session]) -> dict[int, str]:
+    if isinstance(sessions, Mapping):
+        return {int(session_id): str(cassette_path) for session_id, cassette_path in sessions.items()}
+    return {session.session_id: session.cassette_path for session in sessions}
 
 
 def _merge_interactions_from_edits(
@@ -93,10 +106,9 @@ def _merge_interactions_from_edits(
     sessions: dict[int, str],
     base_library_dir: str,
     primary_session_id: int,
+    primary_doc: dict[str, Any],
 ) -> list[dict[str, Any]]:
     merged_by_tag: dict[str, dict[str, Any]] = {}
-    primary_path = Path(base_library_dir) / sessions[primary_session_id]
-    primary_doc = _load_cassette_document(primary_path)
     for interaction in primary_doc.get("interactions") or []:
         tag = _invocation_tag_from_interaction(interaction)
         if tag:
@@ -134,7 +146,7 @@ def _load_cassette_document(path: Path) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8")
     loaded = yaml.safe_load(text)
     if not isinstance(loaded, dict):
-        msg = f"Некорректный YAML кассеты: {path}"
+        msg = f"Invalid cassette YAML format: {path}"
         raise ValueError(msg)
     return loaded
 
@@ -170,6 +182,7 @@ def _build_virtual_cassette_file(
         sessions,
         base_library_dir,
         primary_session_id,
+        primary_doc,
     )
     handle = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False, encoding="utf-8")
     try:
@@ -192,14 +205,14 @@ def _make_invocation_tag_matcher(scenario: ScenarioRow | None) -> Any:
         if scenario is not None and scenario.invocation_patch_regexps:
             if not any(re.search(pattern, incoming) for pattern in scenario.invocation_patch_regexps):
                 raise AssertionError(
-                    f"invocation_tag {incoming!r} не попадает под сценарий {scenario.name!r} → live",
+                    f"invocation_tag {incoming!r} does not match scenario {scenario.name!r} -> live",
                 )
         if not incoming:
-            raise AssertionError("нет invocation_tag")
+            raise AssertionError("missing invocation_tag")
         if not stored:
-            raise AssertionError("в кассете нет X-Invocation-Tag")
+            raise AssertionError("cassette record is missing X-Invocation-Tag")
         if incoming != stored:
-            raise AssertionError(f"тег кассеты {stored!r} != текущего {incoming!r}")
+            raise AssertionError(f"cassette tag {stored!r} != current tag {incoming!r}")
 
     return lhi_invocation_tag_matcher
 
@@ -212,17 +225,17 @@ def _inject_invocation_tag_header(request: Any) -> Any:
 
 
 class LHIInterceptor:
-    """Перехватчик: invocation_tag в ContextVar + VCR-матчер по заголовку X-Invocation-Tag."""
+    """Interceptor: invocation_tag in ContextVar + VCR matcher by X-Invocation-Tag header."""
 
     def __init__(
         self,
-        sessions: dict[int, str],
+        sessions: Mapping[int, str] | Sequence[Session],
         scenario: ScenarioRow | None = None,
         *,
         cassette_library_dir: str | None = None,
         record_mode: str | None = None,
     ) -> None:
-        self._sessions = dict(sessions)
+        self._sessions = _normalize_sessions(sessions)
         self._scenario = scenario
         self._base_library_dir = cassette_library_dir or os.environ.get(
             "VCR_CASSETTES_DIR",
@@ -232,7 +245,7 @@ class LHIInterceptor:
         self._primary_session_id = _resolve_primary_session_id(scenario, self._sessions)
 
         if self._primary_session_id not in self._sessions:
-            msg = f"Нет пути кассеты для session_id={self._primary_session_id}"
+            msg = f"Missing cassette path for session_id={self._primary_session_id}"
             raise KeyError(msg)
 
         self._virtual_cassette_path: str | None = None
@@ -244,7 +257,11 @@ class LHIInterceptor:
                 self._primary_session_id,
             )
             virtual_path = Path(self._virtual_cassette_path)
-            atexit.register(partial(virtual_path.unlink, missing_ok=True))
+            _virtual_cassette_paths.add(virtual_path)
+            global _virtual_cleanup_registered
+            if not _virtual_cleanup_registered:
+                atexit.register(_cleanup_virtual_cassettes)
+                _virtual_cleanup_registered = True
             self._cassette_library_dir = str(virtual_path.parent)
             self._cassette_name = virtual_path.name
         else:

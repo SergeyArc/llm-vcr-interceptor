@@ -12,5 +12,5 @@ class ScenarioRow:
     """Именованный набор правил выборочного воспроизведения по invocation_tag."""
 
     name: str
-    invocation_patch_regexps: list[str]
+    invocation_patch_regexps: tuple[str, ...]
     edits: tuple[EditOperation, ...] = ()

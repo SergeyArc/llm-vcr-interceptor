@@ -10,7 +10,7 @@ async def main() -> None:
     service = get_service()
     scenario = ScenarioRow(
         name="freeze_actor_model",
-        invocation_patch_regexps=[r"^actor_model_(def|example)$"],
+        invocation_patch_regexps=(r"^actor_model_(def|example)$",),
     )
     interceptor = LHIInterceptor(
         sessions={0: "session_0.yaml"},

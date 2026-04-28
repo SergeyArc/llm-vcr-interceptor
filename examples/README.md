@@ -9,22 +9,27 @@ Make sure you have your `.env` file configured with `LLM_API_KEY` and `LLM_BASE_
 
 Use `uv run` to execute the scripts from the project root:
 
-1. **Recorder** (Always record everything):
+1. **Quickstart** (Full flow with `ScenarioRow` + tagged concurrent calls):
+   ```bash
+   uv run python examples/quickstart.py
+   ```
+
+2. **Recorder** (Always record everything):
    ```bash
    uv run python examples/01_recorder.py
    ```
 
-2. **Replayer** (Deterministic playback, no network):
+3. **Replayer** (Deterministic playback, no network):
    ```bash
    uv run python examples/02_replayer.py
    ```
 
-3. **Hybrid** (Existing record + record new):
+4. **Hybrid** (Existing record + record new):
    ```bash
    uv run python examples/03_hybrid.py
    ```
 
-4. **Partial Replayer** (Selective replay by regex):
+5. **Partial Replayer** (Selective replay by regex):
    ```bash
    uv run python examples/04_partial_replayer.py
    ```

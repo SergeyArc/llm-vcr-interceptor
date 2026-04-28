@@ -1,79 +1,90 @@
-# vcr_py_test + LHI (прототип)
+# llm-vcr-interceptor
 
-## LHI (LLM Hub Interceptor)
+`llm-vcr-interceptor` is an invocation-tag-aware replay layer for LLM HTTP traffic built on top of [VCR.py](https://github.com/kevin1024/vcrpy).
 
-Модуль [`lhi/`](lhi/) — прототип перехватчика поверх [VCR.py](https://github.com/kevin1024/vcrpy) со следующей структурой:
+It helps you:
+- replay deterministic LLM requests by `X-Invocation-Tag`;
+- merge and patch recorded interactions across multiple sessions;
+- run pure replay, hybrid record/replay, or full recorder modes.
 
-- [`lhi/session.py`](lhi/session.py): доменные модели сессий и операций правки (`Session`, `AddSession`, `AddRecords`, `RemoveRecords`) для управления составом воспроизводимых записей.
-- [`lhi/scenario.py`](lhi/scenario.py): описание сценария `ScenarioRow` (regex по `invocation_tag` + набор `edits`), который определяет правила выбора и модификации кассет.
-- [`lhi/context.py`](lhi/context.py): управление контекстом `invocation_tag` (`invocation_context`, `get_current_invocation_tag`) как единый источник тега для matcher и инжекта заголовка.
-- [`lhi/interceptor.py`](lhi/interceptor.py): реализация `LHIInterceptor` — инжект `X-Invocation-Tag`, matcher по тегу, виртуальное объединение кассет и синхронизация новых взаимодействий в primary-сессию.
-- [`lhi/__init__.py`](lhi/__init__.py): публичный API модуля (`__all__`) для удобного импорта основных сущностей.
-
-Термины:
-- **Сессия** — именованный источник записей VCR (обычно один YAML-файл кассеты, например `cassettes/session_0.yaml`), доступный по `session_id`.
-- **Сценарий** — правило, которое для текущего `invocation_tag` решает, какие записи оставить из primary-сессии и что добавить/удалить через `edits` (`AddSession`, `AddRecords`, `RemoveRecords`) перед replay.
-- **`invocation_tag`** — уникальный тег конкретного LLM-вызова; прокидывается в заголовок `X-Invocation-Tag`, используется в matcher для выбора точной записи из кассеты и в `ScenarioRow.invocation_patch_regexps` для активации сценария.
-
-Формат YAML кассеты:
-- верхний уровень содержит `interactions` и `version`;
-- поле `recorded_at` опционально и при обновлении кассеты хранит время в формате `datetime.now(UTC).isoformat()`;
-- при синхронизации virtual-cassette в primary при совпадении `invocation_tag` запись перезаписывается и логируется `warning`.
-
-Когда проставляется `invocation_tag`:
-- рекомендуемый путь: через `with invocation_context("tag"):` вокруг обычного вызова SDK/клиента;
-- внутри контекста тег хранится в `ContextVar` на время запроса;
-- в `before_record_request` (встроенный хук VCR.py) тег автоматически добавляется в исходящий HTTP-запрос как `X-Invocation-Tag`;
-- после выхода из контекста тег сбрасывается.
-
-## Режимы работы
-
-- **Recorder** — принудительно записывает все вызовы в кассету (`record_mode="all"`). Пример: [`examples/01_recorder.py`](examples/01_recorder.py).
-- **Replayer** — только воспроизведение из кассеты, без live-запросов (`record_mode="none"`); при отсутствии совпадения запрос падает. Пример: [`examples/02_replayer.py`](examples/02_replayer.py).
-- **Hybrid** — воспроизводит существующие записи и дозаписывает новые (`record_mode="new_episodes"`). Пример: [`examples/03_hybrid.py`](examples/03_hybrid.py).
-- **Partial Replayer** — выборочный replay по regex в `ScenarioRow.invocation_patch_regexps`; теги вне regex принудительно идут в live (или падают при `record_mode="none"`). Пример: [`examples/04_partial_replayer.py`](examples/04_partial_replayer.py).
-
-Логика `Partial Replayer` (пошагово):
-1. Для каждого вызова берётся `invocation_tag` и сравнивается с regex из `ScenarioRow.invocation_patch_regexps`.
-2. Если тег **совпал** с regex:
-   - вызов допускается к поиску в кассете;
-   - матчинг идёт по `X-Invocation-Tag` (тег в запросе должен совпасть с тегом записи).
-3. Если тег **не совпал** с regex:
-   - matcher принудительно отклоняет кассетную запись для этого вызова;
-   - дальше поведение определяет `record_mode`:
-     - `new_episodes`/`all`: выполняется live-запрос (и при необходимости записывается),
-     - `none`: live запрещён, вызов завершается ошибкой.
-4. Если тег совпал с regex, но записи в кассете нет:
-   - `new_episodes`/`all`: выполняется live-запрос с последующей записью,
-   - `none`: ошибка из-за отсутствия подходящей записи.
-
-## Интеграция без правок SDK
-
-Рекомендуемый паттерн для стандартных SDK и кастомных LLM-клиентов:
-1. Обернуть участок работы в `with interceptor.use_cassette():`.
-2. Перед конкретным вызовом поставить `invocation_tag` через `with invocation_context("..."):`.
-3. Выполнить обычный вызов SDK/клиента.
-
-Минимальный пример:
-
-```python
-with interceptor.use_cassette():
-    with invocation_context("actor_model_def"):
-        response = await service.generate("What is the Actor Model in one sentence?")
-```
-
-Ограничения:
-- текущий механизм рассчитан на HTTP-перехват через VCR;
-- gRPC-based SDK (часть сценариев Gemini/Vertex AI) не покрываются этим путём и требуют отдельного interceptor-слоя.
-
-## Запуск
+## Installation
 
 ```bash
-# только replay из кассеты (без сети)
-VCR_RECORD_MODE=none uv run python main.py
-
-# дозапись новых вызовов (гибрид)
-VCR_RECORD_MODE=new_episodes uv run python main.py
+pip install llm-vcr-interceptor
 ```
 
-Кассета по умолчанию: `cassettes/session_0.yaml` (см. `LHIInterceptor` в [`main.py`](main.py)).
+## Quickstart
+
+```python
+from lhi import LHIInterceptor, invocation_context
+
+interceptor = LHIInterceptor(
+    sessions={0: "session_0.yaml"},
+    cassette_library_dir="cassettes",
+    record_mode="new_episodes",
+)
+
+with interceptor.use_cassette():
+    with invocation_context("actor_model_def"):
+        # Call your regular HTTP-based LLM SDK here.
+        pass
+```
+
+Run the end-to-end example:
+
+```bash
+uv run python examples/quickstart.py
+```
+
+## Public API
+
+- `LHIInterceptor`: main VCR wrapper with invocation-tag matcher.
+- `invocation_context`: context manager for setting request-scoped invocation tags.
+- `get_current_invocation_tag`: helper to read the current invocation tag.
+- `ScenarioRow`, `AddSession`, `AddRecords`, `RemoveRecords`: selective replay and patching primitives.
+
+## Record Modes
+
+- `record_mode="none"`: replay only, no live requests.
+- `record_mode="new_episodes"`: replay existing and append missing interactions.
+- `record_mode="all"`: always record fresh interactions.
+
+## Limitations
+
+- The interceptor works for HTTP traffic intercepted by VCR.py.
+- gRPC-based SDK flows require a separate interception strategy.
+
+## Local Development
+
+```bash
+uv run ruff check .
+uv run mypy
+uv run pytest
+```
+
+
+### Module Overview
+
+- `lhi/session.py`: domain models for session sources and scenario edit operations (`Session`, `AddSession`, `AddRecords`, `RemoveRecords`).
+- `lhi/scenario.py`: `ScenarioRow` definition (`invocation_tag` regex + `edits`) that controls selective replay behavior.
+- `lhi/context.py`: invocation tag context management via `invocation_context` and `get_current_invocation_tag`.
+- `lhi/interceptor.py`: `LHIInterceptor` implementation (inject `X-Invocation-Tag`, match by tag, merge virtual cassette, sync updates to primary session).
+- `lhi/__init__.py`: package public API exports.
+
+### Key Terms
+
+- **Session**: named source of VCR interactions (usually one cassette file, for example `cassettes/session_0.yaml`) referenced by `session_id`.
+- **Scenario**: rule set applied for a current `invocation_tag` that can keep, add, or remove replay interactions via `AddSession`, `AddRecords`, and `RemoveRecords`.
+- **invocation_tag**: unique tag of a single LLM call, injected into `X-Invocation-Tag`, used by matcher logic to select exact cassette interactions, and used by `ScenarioRow.invocation_patch_regexps` to activate scenario rules.
+
+## Release Checklist
+
+1. Ensure package name availability on PyPI:
+   - `pip index versions llm-vcr-interceptor`
+2. Bump version in `lhi/__init__.py` (`__version__`).
+3. Build artifacts:
+   - `uv build`
+4. Validate artifacts:
+   - `uv run twine check dist/*`
+5. Publish:
+   - `uv run twine upload dist/*`

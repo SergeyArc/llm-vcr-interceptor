@@ -14,7 +14,7 @@ async def run_partial_replayer() -> None:
     # Otherwise it forces a live call (or fails in 'none' mode).
     scenario = ScenarioRow(
         name="selective_replay",
-        invocation_patch_regexps=[r"^math_.*"],  # Only match mathematical tags for replay
+        invocation_patch_regexps=(r"^math_.*",),  # Only match mathematical tags for replay
     )
 
     interceptor = LHIInterceptor(

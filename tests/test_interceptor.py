@@ -23,7 +23,7 @@ from lhi.interceptor import (
     _write_cassette_document,
 )
 from lhi.scenario import ScenarioRow
-from lhi.session import AddRecords, AddSession, RemoveRecords
+from lhi.session import AddRecords, AddSession, RemoveRecords, Session
 
 
 def test_header_first_missing_attribute_returns_empty() -> None:
@@ -118,14 +118,14 @@ def test_interaction_matches_any_tag_no_match() -> None:
 
 
 def test_collect_remove_patterns_empty_edits() -> None:
-    scenario = ScenarioRow(name="s", invocation_patch_regexps=[], edits=())
+    scenario = ScenarioRow(name="s", invocation_patch_regexps=(), edits=())
     assert _collect_remove_patterns(scenario) == frozenset()
 
 
 def test_collect_remove_patterns_mixed_edits() -> None:
     scenario = ScenarioRow(
         name="s",
-        invocation_patch_regexps=[],
+        invocation_patch_regexps=(),
         edits=(
             AddSession(session_id=1),
             RemoveRecords(tags=("a", "b")),
@@ -140,14 +140,14 @@ def test_needs_virtual_merge_none_scenario() -> None:
 
 
 def test_needs_virtual_merge_empty_edits() -> None:
-    scenario = ScenarioRow(name="s", invocation_patch_regexps=[], edits=())
+    scenario = ScenarioRow(name="s", invocation_patch_regexps=(), edits=())
     assert _needs_virtual_merge(scenario) is False
 
 
 def test_needs_virtual_merge_add_session() -> None:
     scenario = ScenarioRow(
         name="s",
-        invocation_patch_regexps=[],
+        invocation_patch_regexps=(),
         edits=(AddSession(session_id=1),),
     )
     assert _needs_virtual_merge(scenario) is True
@@ -156,7 +156,7 @@ def test_needs_virtual_merge_add_session() -> None:
 def test_needs_virtual_merge_add_records() -> None:
     scenario = ScenarioRow(
         name="s",
-        invocation_patch_regexps=[],
+        invocation_patch_regexps=(),
         edits=(AddRecords(session_id=1, tags=("t",)),),
     )
     assert _needs_virtual_merge(scenario) is True
@@ -165,7 +165,7 @@ def test_needs_virtual_merge_add_records() -> None:
 def test_needs_virtual_merge_remove_records_only() -> None:
     scenario = ScenarioRow(
         name="s",
-        invocation_patch_regexps=[],
+        invocation_patch_regexps=(),
         edits=(RemoveRecords(tags=("a",)),),
     )
     assert _needs_virtual_merge(scenario) is True
@@ -174,7 +174,7 @@ def test_needs_virtual_merge_remove_records_only() -> None:
 def test_resolve_primary_session_id_from_add_session() -> None:
     scenario = ScenarioRow(
         name="s",
-        invocation_patch_regexps=[],
+        invocation_patch_regexps=(),
         edits=(AddSession(session_id=7), AddSession(session_id=9)),
     )
     sessions = {1: "a.yaml", 7: "b.yaml"}
@@ -184,7 +184,7 @@ def test_resolve_primary_session_id_from_add_session() -> None:
 def test_resolve_primary_session_id_from_add_records_when_no_add_session() -> None:
     scenario = ScenarioRow(
         name="s",
-        invocation_patch_regexps=[],
+        invocation_patch_regexps=(),
         edits=(AddRecords(session_id=3, tags=("t",)),),
     )
     sessions = {1: "a.yaml", 3: "b.yaml"}
@@ -192,21 +192,21 @@ def test_resolve_primary_session_id_from_add_records_when_no_add_session() -> No
 
 
 def test_resolve_primary_session_id_falls_back_to_min_session_key() -> None:
-    scenario = ScenarioRow(name="s", invocation_patch_regexps=[], edits=())
+    scenario = ScenarioRow(name="s", invocation_patch_regexps=(), edits=())
     sessions = {5: "a.yaml", 2: "b.yaml"}
     assert _resolve_primary_session_id(scenario, sessions) == 2
 
 
 def test_resolve_primary_session_id_empty_sessions_raises() -> None:
-    scenario = ScenarioRow(name="s", invocation_patch_regexps=[], edits=())
-    with pytest.raises(ValueError, match="sessions пуст"):
+    scenario = ScenarioRow(name="s", invocation_patch_regexps=(), edits=())
+    with pytest.raises(ValueError, match="sessions is empty"):
         _resolve_primary_session_id(scenario, {})
 
 
 def test_load_cassette_document_invalid_root_raises(tmp_path: Path) -> None:
     path = tmp_path / "bad.yaml"
     path.write_text("- not: a mapping\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="Некорректный YAML"):
+    with pytest.raises(ValueError, match="Invalid cassette YAML format"):
         _load_cassette_document(path)
 
 
@@ -319,6 +319,16 @@ def test_use_cassette_updates_recorded_at_each_run_in_recording_mode_without_sce
 
     assert first_loaded["recorded_at"] == "2026-04-28T07:00:00+00:00"
     assert second_loaded["recorded_at"] == "2026-04-28T07:00:01+00:00"
+
+
+def test_interceptor_accepts_session_models(tmp_path: Path) -> None:
+    _write_cassette_document(tmp_path / "session.yaml", [])
+    interceptor = LHIInterceptor(
+        sessions=[Session(session_id=0, cassette_path="session.yaml")],
+        cassette_library_dir=str(tmp_path),
+        record_mode="none",
+    )
+    assert interceptor.cassette_name == "session.yaml"
 
 
 def test_invocation_context_sets_and_resets_tag() -> None:
