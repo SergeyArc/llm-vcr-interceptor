@@ -1,7 +1,7 @@
 import asyncio
 
 from examples.utils import get_service
-from lhi import LHIInterceptor, invocation_context
+from lhi import LHIInterceptor
 
 
 async def run_recorder() -> None:
@@ -17,8 +17,7 @@ async def run_recorder() -> None:
     async with service:
         with interceptor.use_cassette():
             print("--- Recording calls to session_recorder.yaml ---")
-            with invocation_context("math_q1"):
-                resp = await service.generate("What is 2+2?")
+            resp = await service.generate("What is 2+2?")
             print(f"Response: {resp}")
 
 

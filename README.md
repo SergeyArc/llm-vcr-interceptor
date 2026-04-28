@@ -85,28 +85,38 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-Wrap it with three lines:
+Keep your application code unchanged:
 
 ```python
 from openai import OpenAI
-from lhi import LHIInterceptor, invocation_context  # 1. import
 
 client = OpenAI(api_key="...")
-interceptor = LHIInterceptor(sessions={0: "my_session.yaml"})  # 2. create
 
-with interceptor.use_cassette():  # 3. wrap
-    with invocation_context("actor_model_def"):  # unique name for this call
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": "What is the Actor Model?"}],
-        )
-        print(response.choices[0].message.content)
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "What is the Actor Model?"}],
+)
+print(response.choices[0].message.content)
+```
+
+Enable cassette mode in your test/dev harness:
+
+```python
+# conftest.py
+import pytest
+from lhi import LHIInterceptor
+
+@pytest.fixture
+def lhi_session():
+    interceptor = LHIInterceptor(sessions={0: "my_session.yaml"})
+    with interceptor.use_cassette():
+        yield
 ```
 
 - **First run** — a real API call is made and the response is saved to `cassettes/my_session.yaml`.
 - **Every subsequent run** — the response is loaded from the file, no API call is made.
-
-> **`invocation_context`** is a unique name for a specific call. The package uses it to find the right cached response. Name it clearly: `"summarize_article"`, `"extract_entities_step2"`, etc.
+- Request identity in transparent mode is derived from request body fingerprint.
+- If prompt or generation parameters changed (`temperature`, `seed`, `stream`, `tools`, `response_format`), replay key changes and request can go live.
 
 ---
 
@@ -154,31 +164,53 @@ interceptor = LHIInterceptor(
 
 ### Partial Replayer
 
-Freeze early pipeline steps while iterating on later ones. Use `ScenarioRow` with a regex pattern on the call name.
+Freeze early pipeline steps while iterating on later ones. Use `ScenarioRow` with a regex pattern on request identity.
 
 ```python
-from lhi import LHIInterceptor, ScenarioRow, invocation_context
+from lhi import LHIInterceptor, ScenarioRow
+from lhi.interceptor import DEFAULT_CALLSITE_SKIP_PREFIXES
 
-# Steps named "preprocess_*" are served from cache.
+# Calls emitted from preprocess_step1() are served from cache.
 # Everything else hits the real API.
 scenario = ScenarioRow(
     name="freeze_preprocessing",
-    invocation_patch_regexps=(r"^preprocess_.*",),
+    invocation_patch_regexps=(r"^callsite:pipeline/preprocess.py:preprocess_step1:.*",),
 )
 
 interceptor = LHIInterceptor(
     sessions={0: "my_session.yaml"},
     scenario=scenario,
     record_mode="new_episodes",
+    identity_strategy="callsite",
+    # Skip local helper layers if they wrap the actual SDK call.
+    callsite_skip_prefixes=(*DEFAULT_CALLSITE_SKIP_PREFIXES, "pipeline.llm_client"),
 )
 
-with interceptor.use_cassette():
-    with invocation_context("preprocess_step1"):
-        pass  # served from cache
+def preprocess_step1():
+    pass
 
-    with invocation_context("generate_report"):
-        pass  # real API call
+def generate_report():
+    pass
+
+with interceptor.use_cassette():
+    preprocess_step1()  # served from cache
+    generate_report()  # real API call
 ```
+
+`invocation_context()` remains an advanced API for explicit named control (`ScenarioRow`, `AddRecords`, `RemoveRecords`). In `identity_strategy="callsite"` you can use selective replay without wrapping each call.
+
+### Identity strategies
+
+- `fingerprint` (default): transparent replay by canonical request body fingerprint.
+- `callsite`: derive `X-Invocation-Tag` from `callsite:file:function:messages_hash8`; useful for `ScenarioRow` without explicit tags.
+- `explicit_first`: use explicit `invocation_context` tag when present, otherwise derive callsite tag, then fallback to fingerprint.
+
+Notes for `callsite`/`explicit_first`:
+
+- callsite tag depends on relative file path and function name; refactors can change tags.
+- messages hash includes top-level `system` + `messages`, and ignores generation params such as `temperature`/`seed`.
+- if your app wraps the SDK in helper modules, add those modules to `callsite_skip_prefixes` so callsite points to the pipeline step, not the helper.
+- use `callsite_project_root` to stabilize relative paths across local runs and CI.
 
 ---
 
@@ -275,7 +307,7 @@ asyncio.run(main())
 
 ## LangChain and LlamaIndex
 
-LangChain and LlamaIndex work without native adapters when their providers use regular HTTP clients under the hood. Keep `LHIInterceptor` at the cassette boundary and put `invocation_context()` around the framework call you want to cache.
+LangChain and LlamaIndex work without native adapters when their providers use regular HTTP clients under the hood. Keep `LHIInterceptor` at the cassette boundary. Use `invocation_context()` only when you need named step-level control.
 
 Install the LangChain OpenAI provider before running the example:
 
@@ -305,7 +337,7 @@ with interceptor.use_cassette():
         response = query_engine.query("What changed in the latest report?")
 ```
 
-If one `chain.invoke()` performs several hidden LLM or embedding calls, split the workflow into explicit steps and give each step its own `invocation_context()`. This keeps cassette records stable and avoids framework-specific callback dependencies in the core package.
+If one `chain.invoke()` performs several hidden LLM or embedding calls and you need deterministic named control, split the workflow into explicit steps and give each step its own `invocation_context()`. This keeps cassette records stable and avoids framework-specific callback dependencies in the core package.
 
 ---
 
@@ -347,9 +379,9 @@ uv run python examples/05_langchain_basic.py
 
 | Object | Description |
 |--------|-------------|
-| `LHIInterceptor(sessions, scenario, cassette_library_dir, record_mode)` | Main object. `sessions` is a dict `{id: "file.yaml"}` |
+| `LHIInterceptor(sessions, scenario, cassette_library_dir, record_mode, identity_strategy, callsite_skip_prefixes, callsite_project_root)` | Main object. `sessions` is a dict `{id: "file.yaml"}` |
 | `interceptor.use_cassette()` | Context manager that activates the cache |
-| `invocation_context("name")` | Context manager that sets the name of the current call |
+| `invocation_context("name")` | Optional context manager for named step-level replay control |
 | `get_current_invocation_tag()` | Returns the current call name |
 | `ScenarioRow(name, invocation_patch_regexps, edits)` | Rules for selective replay |
 | `AddSession(session_id)` | Include all records from a session |
@@ -370,6 +402,7 @@ Environment variables:
 
 - Works with HTTP traffic only (OpenAI, Anthropic, Mistral, and other REST APIs).
 - gRPC clients are not supported.
+- Transparent replay key is based on canonical request body; changing prompt or generation parameters creates a new cache key.
 - SSE replay preserves event content/order but not original timing between events.
 - SSE normalization is limited to 10 MiB by default (override via `LHI_STREAM_MAX_BODY_BYTES`).
 

@@ -6,10 +6,16 @@ from typing import Any
 import pytest
 
 from lhi.interceptor import (
+    DEFAULT_CALLSITE_SKIP_PREFIXES,
     INVOCATION_TAG_HEADER,
+    _build_messages_fingerprint,
+    _build_request_fingerprint,
+    _canonicalize_request_body,
     _collect_remove_patterns,
+    _derive_callsite_tag,
     _header_first,
     _interaction_matches_any_tag,
+    _make_before_record_request_hook,
     _invocation_tag_from_interaction,
     _load_cassette_document,
     _needs_virtual_merge,
@@ -119,3 +125,58 @@ def test_write_and_load_cassette_document_round_trip(tmp_path: Path) -> None:
     assert loaded["version"] == 1
     assert loaded["recorded_at"] == "2026-04-28T07:00:00+00:00"
     assert _invocation_tag_from_interaction(loaded["interactions"][0]) == "t1"
+
+
+def test_canonicalize_request_body_sorts_json_keys() -> None:
+    first = _canonicalize_request_body('{"b":2,"a":1}')
+    second = _canonicalize_request_body('{"a":1,"b":2}')
+    assert first == second
+
+
+def test_build_request_fingerprint_is_stable_for_equivalent_json() -> None:
+    first = _build_request_fingerprint('{"messages":[{"role":"user","content":"hello"}],"temperature":0.7}')
+    second = _build_request_fingerprint('{"temperature":0.7,"messages":[{"content":"hello","role":"user"}]}')
+    assert first == second
+
+
+def test_build_request_fingerprint_changes_when_payload_changes() -> None:
+    first = _build_request_fingerprint('{"temperature":0.7,"messages":[{"content":"hello"}]}')
+    second = _build_request_fingerprint('{"temperature":0.0,"messages":[{"content":"hello"}]}')
+    assert first != second
+
+
+def test_build_messages_fingerprint_uses_system_and_messages() -> None:
+    first = _build_messages_fingerprint(
+        '{"system":"math tutor","messages":[{"role":"user","content":"2+2?"}],"temperature":0.7}',
+    )
+    second = _build_messages_fingerprint(
+        '{"system":"math tutor","messages":[{"content":"2+2?","role":"user"}],"temperature":0.0}',
+    )
+    third = _build_messages_fingerprint(
+        '{"system":"history tutor","messages":[{"role":"user","content":"2+2?"}],"temperature":0.7}',
+    )
+    assert first == second
+    assert first != third
+
+
+def test_make_before_record_request_hook_idempotent_when_tag_exists() -> None:
+    class Request:
+        body = b'{"messages":[{"role":"user","content":"hello"}]}'
+        headers = {INVOCATION_TAG_HEADER: "existing"}
+
+    hook = _make_before_record_request_hook(
+        identity_strategy="callsite",
+        callsite_skip_prefixes=DEFAULT_CALLSITE_SKIP_PREFIXES,
+        callsite_project_root=str(Path.cwd()),
+    )
+    result = hook(Request())
+    assert result.headers[INVOCATION_TAG_HEADER] == "existing"
+
+
+def test_derive_callsite_tag_returns_empty_when_no_app_frame() -> None:
+    tag = _derive_callsite_tag(
+        '{"messages":[{"role":"user","content":"hello"}]}',
+        skip_prefixes=("",),
+        project_root=Path.cwd(),
+    )
+    assert tag == ""

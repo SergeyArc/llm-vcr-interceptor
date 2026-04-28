@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import atexit
+import hashlib
+import inspect
+import json
 import logging
 import os
 import re
@@ -9,10 +12,11 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import vcr
 import yaml
+from vcr.request import Request as VcrRequest
 
 from lhi.context import get_current_invocation_tag
 from lhi.scenario import ScenarioRow
@@ -20,6 +24,19 @@ from lhi.session import AddRecords, AddSession, RemoveRecords, Session
 from lhi.streaming import apply_replay_streaming_shim, normalize_streaming_response
 
 INVOCATION_TAG_HEADER = "x-invocation-tag"
+type IdentityStrategy = Literal["fingerprint", "callsite", "explicit_first"]
+DEFAULT_CALLSITE_SKIP_PREFIXES: tuple[str, ...] = (
+    "lhi.",
+    "vcr.",
+    "httpx.",
+    "httpcore.",
+    "anthropic.",
+    "openai.",
+    "asyncio.",
+    "concurrent.",
+    # stdlib module name has no package prefix.
+    "contextlib",
+)
 _virtual_cassette_paths: set[Path] = set()
 _virtual_cleanup_registered = False
 
@@ -199,30 +216,189 @@ def _build_virtual_cassette_file(
     return handle.name
 
 
-def _make_invocation_tag_matcher(scenario: ScenarioRow | None) -> Any:
-    def lhi_invocation_tag_matcher(r1: Any, r2: Any) -> None:
-        incoming = _header_first(r1, INVOCATION_TAG_HEADER) or (get_current_invocation_tag() or "")
-        stored = _header_first(r2, INVOCATION_TAG_HEADER)
-        if scenario is not None and scenario.invocation_patch_regexps:
-            if not any(re.search(pattern, incoming) for pattern in scenario.invocation_patch_regexps):
-                raise AssertionError(
-                    f"invocation_tag {incoming!r} does not match scenario {scenario.name!r} -> live",
+def _make_request_identity_matcher(scenario: ScenarioRow | None) -> Any:
+    def lhi_request_identity_matcher(r1: Any, r2: Any) -> None:
+        incoming_tag = _header_first(r1, INVOCATION_TAG_HEADER)
+        stored_tag = _header_first(r2, INVOCATION_TAG_HEADER)
+        if incoming_tag:
+            if scenario is not None and scenario.invocation_patch_regexps:
+                if not any(re.search(pattern, incoming_tag) for pattern in scenario.invocation_patch_regexps):
+                    raise AssertionError(
+                        f"invocation_tag {incoming_tag!r} does not match scenario {scenario.name!r} -> live",
+                    )
+            if not stored_tag:
+                raise AssertionError("cassette record is missing X-Invocation-Tag")
+            if incoming_tag != stored_tag:
+                raise AssertionError(f"cassette tag {stored_tag!r} != current tag {incoming_tag!r}")
+            return
+
+        incoming_fingerprint = _build_request_fingerprint(getattr(r1, "body", None))
+        stored_fingerprint = _build_request_fingerprint(getattr(r2, "body", None))
+        if incoming_fingerprint != stored_fingerprint:
+            raise AssertionError(
+                "request body fingerprint mismatch; prompt or generation parameters changed; "
+                "re-record cassette with record_mode='new_episodes'",
+            )
+
+    return lhi_request_identity_matcher
+
+
+def _body_to_bytes(body: Any) -> bytes:
+    if body is None:
+        return b""
+    if isinstance(body, bytes):
+        return body
+    if isinstance(body, str):
+        return body.encode("utf-8")
+    return str(body).encode("utf-8")
+
+
+def _canonicalize_request_body(body: Any) -> bytes:
+    payload = _body_to_bytes(body)
+    if not payload:
+        return payload
+    try:
+        decoded = payload.decode("utf-8")
+        parsed = json.loads(decoded)
+        normalized = json.dumps(parsed, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return normalized.encode("utf-8")
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        return payload
+
+
+def _build_request_fingerprint(body: Any) -> str:
+    canonical_body = _canonicalize_request_body(body)
+    digest = hashlib.sha256(canonical_body).hexdigest()
+    return f"sha256:{digest}"
+
+
+def _canonicalize_json_value(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _build_messages_fingerprint(body: Any) -> str:
+    payload = _body_to_bytes(body)
+    if not payload:
+        return hashlib.sha256(b"").hexdigest()
+    try:
+        decoded = payload.decode("utf-8")
+        parsed = json.loads(decoded)
+        if not isinstance(parsed, dict):
+            return hashlib.sha256(_canonicalize_request_body(body)).hexdigest()
+        prompt_payload = {
+            "system": parsed.get("system"),
+            "messages": parsed.get("messages"),
+        }
+        canonical = _canonicalize_json_value(prompt_payload).encode("utf-8")
+        return hashlib.sha256(canonical).hexdigest()
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        return hashlib.sha256(_canonicalize_request_body(body)).hexdigest()
+
+
+def _resolve_project_root(callsite_project_root: str | None) -> Path:
+    if callsite_project_root:
+        return Path(callsite_project_root).resolve()
+    current = Path.cwd().resolve()
+    for candidate in (current, *current.parents):
+        if (candidate / "pyproject.toml").exists() or (candidate / ".git").exists():
+            return candidate
+    return current
+
+
+def _find_app_frame(skip_prefixes: tuple[str, ...]) -> tuple[str, str] | None:
+    frame = inspect.currentframe()
+    if frame is None:
+        return None
+    try:
+        current = frame.f_back
+        while current is not None:
+            module_name = str(current.f_globals.get("__name__", ""))
+            if not any(module_name.startswith(prefix) for prefix in skip_prefixes):
+                return current.f_code.co_filename, current.f_code.co_name
+            current = current.f_back
+        return None
+    finally:
+        del frame
+
+
+def _derive_callsite_tag(
+    body: Any,
+    *,
+    skip_prefixes: tuple[str, ...],
+    project_root: Path,
+) -> str:
+    app_frame = _find_app_frame(skip_prefixes)
+    if app_frame is None:
+        return ""
+    frame_filename, frame_function = app_frame
+    frame_path = Path(frame_filename)
+    try:
+        relative_file = frame_path.resolve().relative_to(project_root).as_posix()
+    except ValueError:
+        relative_file = frame_path.name
+    if relative_file.startswith("<"):
+        return ""
+    messages_hash8 = _build_messages_fingerprint(body)[:8]
+    return f"callsite:{relative_file}:{frame_function}:{messages_hash8}"
+
+
+def _copy_request_with_header(request: Any, header_name: str, header_value: str) -> Any:
+    headers = dict(getattr(request, "headers", {}))
+    headers[header_name] = header_value
+    return VcrRequest(
+        getattr(request, "method"),
+        getattr(request, "uri"),
+        getattr(request, "body", None),
+        headers,
+    )
+
+
+def _is_loading_cassette() -> bool:
+    frame = inspect.currentframe()
+    if frame is None:
+        return False
+    try:
+        current = frame.f_back
+        while current is not None:
+            if current.f_globals.get("__name__") == "vcr.cassette" and current.f_code.co_name == "_load":
+                return True
+            current = current.f_back
+        return False
+    finally:
+        del frame
+
+
+def _make_before_record_request_hook(
+    *,
+    identity_strategy: IdentityStrategy,
+    callsite_skip_prefixes: tuple[str, ...],
+    callsite_project_root: str | None,
+) -> Any:
+    project_root = _resolve_project_root(callsite_project_root)
+
+    def _inject_invocation_tag_header(request: Any) -> Any:
+        existing_tag = _header_first(request, INVOCATION_TAG_HEADER)
+        if existing_tag:
+            return request
+        tag = get_current_invocation_tag() or ""
+        if not tag and identity_strategy in ("callsite", "explicit_first"):
+            if _is_loading_cassette():
+                return request
+            tag = _derive_callsite_tag(
+                getattr(request, "body", None),
+                skip_prefixes=callsite_skip_prefixes,
+                project_root=project_root,
+            )
+            if not tag and identity_strategy == "callsite":
+                logging.warning(
+                    "lhi: identity_strategy='callsite' could not derive app frame; "
+                    "falling back to fingerprint matching",
                 )
-        if not incoming:
-            raise AssertionError("missing invocation_tag")
-        if not stored:
-            raise AssertionError("cassette record is missing X-Invocation-Tag")
-        if incoming != stored:
-            raise AssertionError(f"cassette tag {stored!r} != current tag {incoming!r}")
+        if tag:
+            return _copy_request_with_header(request, INVOCATION_TAG_HEADER, tag)
+        return request
 
-    return lhi_invocation_tag_matcher
-
-
-def _inject_invocation_tag_header(request: Any) -> Any:
-    tag = get_current_invocation_tag()
-    if tag:
-        request.headers[INVOCATION_TAG_HEADER] = tag
-    return request
+    return _inject_invocation_tag_header
 
 
 @contextmanager
@@ -245,7 +421,7 @@ def _httpcore_replay_shim() -> Iterator[None]:
 
 
 class LHIInterceptor:
-    """Interceptor: invocation_tag in ContextVar + VCR matcher by X-Invocation-Tag header."""
+    """Interceptor with tag-aware and body-fingerprint-aware VCR matcher."""
 
     def __init__(
         self,
@@ -254,6 +430,9 @@ class LHIInterceptor:
         *,
         cassette_library_dir: str | None = None,
         record_mode: str | None = None,
+        identity_strategy: IdentityStrategy = "fingerprint",
+        callsite_skip_prefixes: tuple[str, ...] = DEFAULT_CALLSITE_SKIP_PREFIXES,
+        callsite_project_root: str | None = None,
     ) -> None:
         self._sessions = _normalize_sessions(sessions)
         self._scenario = scenario
@@ -262,6 +441,9 @@ class LHIInterceptor:
             "cassettes",
         )
         self._record_mode = record_mode or os.environ.get("VCR_RECORD_MODE", "new_episodes")
+        self._identity_strategy = identity_strategy
+        self._callsite_skip_prefixes = callsite_skip_prefixes
+        self._callsite_project_root = callsite_project_root
         self._primary_session_id = _resolve_primary_session_id(scenario, self._sessions)
 
         if self._primary_session_id not in self._sessions:
@@ -291,10 +473,15 @@ class LHIInterceptor:
         self._vcr = self._build_vcr()
 
     def _build_vcr(self) -> vcr.VCR:
+        before_record_request_hook = _make_before_record_request_hook(
+            identity_strategy=self._identity_strategy,
+            callsite_skip_prefixes=self._callsite_skip_prefixes,
+            callsite_project_root=self._callsite_project_root,
+        )
         instance = vcr.VCR(
             cassette_library_dir=self._cassette_library_dir,
             record_mode=self._record_mode,
-            before_record_request=_inject_invocation_tag_header,
+            before_record_request=before_record_request_hook,
             before_record_response=normalize_streaming_response,
             filter_headers=(
                 "authorization",
@@ -308,12 +495,12 @@ class LHIInterceptor:
                 "port",
                 "path",
                 "query",
-                "lhi_invocation_tag",
+                "lhi_request_identity",
             ),
         )
         instance.register_matcher(
-            "lhi_invocation_tag",
-            _make_invocation_tag_matcher(self._scenario),
+            "lhi_request_identity",
+            _make_request_identity_matcher(self._scenario),
         )
         return instance
 

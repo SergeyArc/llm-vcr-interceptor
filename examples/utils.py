@@ -3,8 +3,12 @@ from __future__ import annotations
 import os
 from types import TracebackType
 
-from dotenv import load_dotenv
 from openai import AsyncOpenAI
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None
 
 
 class OpenAITextGenerator:
@@ -32,7 +36,8 @@ class OpenAITextGenerator:
 
 
 def get_service() -> OpenAITextGenerator:
-    load_dotenv()
+    if load_dotenv is not None:
+        load_dotenv()
     client = AsyncOpenAI(
         api_key=os.environ.get("LLM_API_KEY"),
         base_url=os.environ.get("LLM_BASE_URL"),

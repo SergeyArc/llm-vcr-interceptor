@@ -1,42 +1,48 @@
 import asyncio
 
 from examples.utils import get_service
-from lhi import LHIInterceptor, ScenarioRow, invocation_context
+from lhi import LHIInterceptor, ScenarioRow
+from lhi.interceptor import DEFAULT_CALLSITE_SKIP_PREFIXES
 
 
 async def run_partial_replayer() -> None:
     """Mode: Partial Replayer
-    Selective replay/live based on tag regex (invocation_patch_regexps).
+    Selective replay/live based on callsite-derived tag regex.
     """
     service = get_service()
 
-    # This scenario only allows replaying calls where the tag matches the regex.
-    # Otherwise it forces a live call (or fails in 'none' mode).
+    async def math_addition() -> str:
+        return await service.generate("What is 5 + 7?")
+
+    async def general_q() -> str:
+        return await service.generate("What is the capital of France?")
+
+    # Replay only requests emitted from math_addition callsite.
     scenario = ScenarioRow(
         name="selective_replay",
-        invocation_patch_regexps=(r"^math_.*",),  # Only match mathematical tags for replay
+        invocation_patch_regexps=(r"^callsite:examples/04_partial_replayer\.py:math_addition:.*",),
     )
 
     interceptor = LHIInterceptor(
         sessions={0: "session_0.yaml"},
         scenario=scenario,
         record_mode="new_episodes",
+        identity_strategy="callsite",
+        callsite_skip_prefixes=(*DEFAULT_CALLSITE_SKIP_PREFIXES, "examples.utils"),
     )
 
     async with service:
         with interceptor.use_cassette():
             print("--- Partial Replayer: selective matching by regex ---")
 
-            # This tag "math_addition" MATCHES the regex -> will be replayed if found
+            # math_addition callsite matches regex -> replay if found
             print("Calling math_addition (matches regex)...")
-            with invocation_context("math_addition"):
-                resp1 = await service.generate("What is 5 + 7?")
+            resp1 = await math_addition()
             print(f"Response 1: {resp1}")
 
-            # This tag "general_q" DOES NOT match the regex -> forces live call
+            # general_q callsite does not match -> forces live request in new_episodes mode
             print("\nCalling general_q (doesn't match regex) -> FORCING LIVE REQUEST")
-            with invocation_context("general_q"):
-                resp2 = await service.generate("What is the capital of France?")
+            resp2 = await general_q()
             print(f"Response 2: {resp2}")
 
 

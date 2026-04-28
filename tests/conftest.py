@@ -12,23 +12,25 @@ from lhi.context import invocation_context
 
 def make_http_interaction(
     *,
-    invocation_tag: str,
+    invocation_tag: str | None,
     uri: str,
     method: str = "GET",
     status_code: int = 200,
     body: str = '{"source":"cassette"}',
+    request_body: str = "",
     content_type: str = "application/json",
     response_headers: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     headers = {"Content-Type": [content_type]}
     if response_headers:
         headers.update(response_headers)
+    request_headers: dict[str, list[str]] = {}
+    if invocation_tag:
+        request_headers["x-invocation-tag"] = [invocation_tag]
     return {
         "request": {
-            "body": "",
-            "headers": {
-                "x-invocation-tag": [invocation_tag],
-            },
+            "body": request_body,
+            "headers": request_headers,
             "method": method,
             "uri": uri,
         },
@@ -58,6 +60,14 @@ def tagged_get(url: str, invocation_tag: str) -> httpx.Response:
         return httpx.get(url, timeout=2.0)
 
 
+def untagged_get(url: str) -> httpx.Response:
+    return httpx.get(url, timeout=2.0)
+
+
+def untagged_post_json(url: str, payload: dict[str, Any]) -> httpx.Response:
+    return httpx.post(url, json=payload, timeout=2.0)
+
+
 @pytest.fixture
 def make_interaction_fixture() -> Any:
     return make_http_interaction
@@ -76,3 +86,13 @@ def read_cassette_fixture() -> Any:
 @pytest.fixture
 def tagged_get_fixture() -> Any:
     return tagged_get
+
+
+@pytest.fixture
+def untagged_get_fixture() -> Any:
+    return untagged_get
+
+
+@pytest.fixture
+def untagged_post_json_fixture() -> Any:
+    return untagged_post_json

@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import os
 
-from dotenv import load_dotenv
+from lhi import LHIInterceptor
 
-from lhi import LHIInterceptor, invocation_context
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None
 
 
 def run_langchain_basic() -> None:
@@ -16,7 +19,8 @@ def run_langchain_basic() -> None:
         msg = "Install optional dependencies first: pip install langchain-openai"
         raise SystemExit(msg) from exc
 
-    load_dotenv()
+    if load_dotenv is not None:
+        load_dotenv()
     model = ChatOpenAI(
         model=os.environ.get("LLM_MODEL_NAME", "gpt-4o-mini"),
         api_key=os.environ.get("LLM_API_KEY"),
@@ -28,8 +32,7 @@ def run_langchain_basic() -> None:
     )
 
     with interceptor.use_cassette():
-        with invocation_context("langchain_actor_model"):
-            response = model.invoke([HumanMessage(content="Explain the Actor Model in one sentence.")])
+        response = model.invoke([HumanMessage(content="Explain the Actor Model in one sentence.")])
 
     print(response.content)
 
