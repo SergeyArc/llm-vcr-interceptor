@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import atexit
+import logging
 import os
 import re
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -137,8 +139,19 @@ def _load_cassette_document(path: Path) -> dict[str, Any]:
     return loaded
 
 
-def _write_cassette_document(path: Path, interactions: list[dict[str, Any]]) -> None:
+def _current_recorded_at() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _write_cassette_document(
+    path: Path,
+    interactions: list[dict[str, Any]],
+    *,
+    recorded_at: str | None = None,
+) -> None:
     payload: dict[str, Any] = {"interactions": interactions, "version": 1}
+    if recorded_at is not None:
+        payload["recorded_at"] = recorded_at
     path.write_text(yaml.safe_dump(payload, default_flow_style=False, allow_unicode=True), encoding="utf-8")
 
 
@@ -148,6 +161,10 @@ def _build_virtual_cassette_file(
     base_library_dir: str,
     primary_session_id: int,
 ) -> str:
+    primary_path = Path(base_library_dir) / sessions[primary_session_id]
+    primary_doc = _load_cassette_document(primary_path)
+    primary_recorded_at = primary_doc.get("recorded_at")
+    virtual_recorded_at = primary_recorded_at if isinstance(primary_recorded_at, str) else None
     interactions = _merge_interactions_from_edits(
         scenario,
         sessions,
@@ -156,12 +173,10 @@ def _build_virtual_cassette_file(
     )
     handle = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False, encoding="utf-8")
     try:
-        yaml.safe_dump(
-            {"interactions": interactions, "version": 1},
-            handle,
-            default_flow_style=False,
-            allow_unicode=True,
-        )
+        payload: dict[str, Any] = {"interactions": interactions, "version": 1}
+        if virtual_recorded_at is not None:
+            payload["recorded_at"] = virtual_recorded_at
+        yaml.safe_dump(payload, handle, default_flow_style=False, allow_unicode=True)
         handle.close()
     except Exception:
         handle.close()
@@ -296,9 +311,32 @@ class LHIInterceptor:
         for item in new_slice:
             tag = _invocation_tag_from_interaction(item)
             if tag:
+                if tag in primary_by_tag:
+                    logging.warning(
+                        "lhi: overwriting existing cassette interaction for tag %r in %s",
+                        tag,
+                        primary_path,
+                    )
                 primary_by_tag[tag] = item
         final_interactions = primary_untagged + list(primary_by_tag.values())
-        _write_cassette_document(primary_path, final_interactions)
+        _write_cassette_document(
+            primary_path,
+            final_interactions,
+            recorded_at=_current_recorded_at(),
+        )
+
+    def _update_primary_recorded_at(self) -> None:
+        primary_rel = self._sessions[self._primary_session_id]
+        primary_path = Path(self._base_library_dir) / primary_rel
+        if not primary_path.exists():
+            return
+        primary_doc = _load_cassette_document(primary_path)
+        primary_interactions = list(primary_doc.get("interactions") or [])
+        _write_cassette_document(
+            primary_path,
+            primary_interactions,
+            recorded_at=_current_recorded_at(),
+        )
 
     @contextmanager
     def use_cassette(self) -> Iterator[None]:
@@ -313,3 +351,5 @@ class LHIInterceptor:
         finally:
             if self._virtual_cassette_path:
                 self._sync_new_interactions_to_primary(previous_count)
+            elif self._record_mode != "none":
+                self._update_primary_recorded_at()

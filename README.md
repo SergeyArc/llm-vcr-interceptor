@@ -15,14 +15,16 @@
 - **Сценарий** — правило, которое для текущего `invocation_tag` решает, какие записи оставить из primary-сессии и что добавить/удалить через `edits` (`AddSession`, `AddRecords`, `RemoveRecords`) перед replay.
 - **`invocation_tag`** — уникальный тег конкретного LLM-вызова; прокидывается в заголовок `X-Invocation-Tag`, используется в matcher для выбора точной записи из кассеты и в `ScenarioRow.invocation_patch_regexps` для активации сценария.
 
+Формат YAML кассеты:
+- верхний уровень содержит `interactions` и `version`;
+- поле `recorded_at` опционально и при обновлении кассеты хранит время в формате `datetime.now(UTC).isoformat()`;
+- при синхронизации virtual-cassette в primary при совпадении `invocation_tag` запись перезаписывается и логируется `warning`.
+
 Когда проставляется `invocation_tag`:
 - рекомендуемый путь: через `with invocation_context("tag"):` вокруг обычного вызова SDK/клиента;
-- backward-compatible путь: через `interceptor.generate(service, prompt, invocation_tag)`;
 - внутри контекста тег хранится в `ContextVar` на время запроса;
 - в `before_record_request` (встроенный хук VCR.py) тег автоматически добавляется в исходящий HTTP-запрос как `X-Invocation-Tag`;
 - после выхода из контекста тег сбрасывается.
-
-**Важно:** `llm_actor` выполняет HTTP в воркерах пула, поэтому тег передаётся через `_pending_invocation_tag` под `asyncio.Lock` на время `await service.generate()`, а не через `ContextVar`.
 
 ## Режимы работы
 

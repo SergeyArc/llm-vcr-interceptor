@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from lhi import interceptor as interceptor_module
 from lhi.context import get_current_invocation_tag, invocation_context
 from lhi.interceptor import (
     INVOCATION_TAG_HEADER,
+    LHIInterceptor,
     _collect_remove_patterns,
     _header_first,
     _interaction_matches_any_tag,
@@ -219,6 +222,103 @@ def test_write_and_load_cassette_document_round_trip(tmp_path: Path) -> None:
     assert loaded["version"] == 1
     assert len(loaded["interactions"]) == 1
     assert _invocation_tag_from_interaction(loaded["interactions"][0]) == "t1"
+
+
+def test_write_and_load_cassette_document_with_recorded_at(tmp_path: Path) -> None:
+    path = tmp_path / "cassette.yaml"
+    interactions: list[dict[str, Any]] = [
+        {
+            "request": {"headers": {INVOCATION_TAG_HEADER: "t1"}},
+        },
+    ]
+    _write_cassette_document(path, interactions, recorded_at="2026-04-28T07:00:00+00:00")
+    loaded = _load_cassette_document(path)
+    assert loaded["recorded_at"] == "2026-04-28T07:00:00+00:00"
+    assert len(loaded["interactions"]) == 1
+
+
+def test_sync_to_primary_logs_warning_on_tag_overwrite(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    primary_path = tmp_path / "primary.yaml"
+    virtual_path = tmp_path / "virtual.yaml"
+    _write_cassette_document(
+        primary_path,
+        [{"request": {"headers": {INVOCATION_TAG_HEADER: "tag-1"}}, "response": {"status": {"code": 200}}}],
+        recorded_at="2026-01-01T00:00:00+00:00",
+    )
+    _write_cassette_document(
+        virtual_path,
+        [{"request": {"headers": {INVOCATION_TAG_HEADER: "tag-1"}}, "response": {"status": {"code": 201}}}],
+        recorded_at="2026-01-01T00:00:00+00:00",
+    )
+    interceptor = object.__new__(LHIInterceptor)
+    interceptor._virtual_cassette_path = str(virtual_path)
+    interceptor._sessions = {0: "primary.yaml"}
+    interceptor._primary_session_id = 0
+    interceptor._base_library_dir = str(tmp_path)
+
+    with caplog.at_level("WARNING"):
+        interceptor._sync_new_interactions_to_primary(previous_count=0)
+
+    assert "overwriting existing cassette interaction for tag 'tag-1'" in caplog.text
+    loaded = _load_cassette_document(primary_path)
+    assert loaded["interactions"][0]["response"]["status"]["code"] == 201
+    assert isinstance(loaded.get("recorded_at"), str)
+
+
+def test_use_cassette_does_not_update_recorded_at_in_replay_mode_without_scenario(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cassette_path = tmp_path / "session.yaml"
+    _write_cassette_document(cassette_path, [])
+    interceptor = LHIInterceptor(
+        sessions={0: "session.yaml"},
+        cassette_library_dir=str(tmp_path),
+        record_mode="none",
+    )
+
+    @contextmanager
+    def fake_use_cassette(_name: str) -> Any:
+        yield
+
+    monkeypatch.setattr(interceptor._vcr, "use_cassette", fake_use_cassette)
+
+    with interceptor.use_cassette():
+        pass
+    loaded = _load_cassette_document(cassette_path)
+    assert "recorded_at" not in loaded
+
+
+def test_use_cassette_updates_recorded_at_each_run_in_recording_mode_without_scenario(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cassette_path = tmp_path / "session.yaml"
+    _write_cassette_document(cassette_path, [])
+    interceptor = LHIInterceptor(
+        sessions={0: "session.yaml"},
+        cassette_library_dir=str(tmp_path),
+        record_mode="new_episodes",
+    )
+
+    @contextmanager
+    def fake_use_cassette(_name: str) -> Any:
+        yield
+
+    monkeypatch.setattr(interceptor._vcr, "use_cassette", fake_use_cassette)
+    recorded_at_values = iter(("2026-04-28T07:00:00+00:00", "2026-04-28T07:00:01+00:00"))
+    monkeypatch.setattr(interceptor_module, "_current_recorded_at", lambda: next(recorded_at_values))
+
+    with interceptor.use_cassette():
+        pass
+    first_loaded = _load_cassette_document(cassette_path)
+
+    with interceptor.use_cassette():
+        pass
+    second_loaded = _load_cassette_document(cassette_path)
+
+    assert first_loaded["recorded_at"] == "2026-04-28T07:00:00+00:00"
+    assert second_loaded["recorded_at"] == "2026-04-28T07:00:01+00:00"
 
 
 def test_invocation_context_sets_and_resets_tag() -> None:
