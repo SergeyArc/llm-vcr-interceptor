@@ -11,7 +11,11 @@ except ImportError:
 
 
 def run_langchain_basic() -> None:
-    """Wrap a LangChain call with the existing LHI cassette boundary."""
+    """Wrap a LangChain call with a transparent cassette boundary.
+
+    Application code keeps using model.invoke(...), while cassette writes/replays
+    are handled automatically inside use_cassette().
+    """
     try:
         from langchain_core.messages import HumanMessage
         from langchain_openai import ChatOpenAI
@@ -34,7 +38,7 @@ def run_langchain_basic() -> None:
     with interceptor.use_cassette():
         response = model.invoke([HumanMessage(content="Explain the Actor Model in one sentence.")])
 
-    print(response.content)
+    print(f"LangChain response (auto replay/record via cassette): {response.content}")
 
 
 if __name__ == "__main__":

@@ -5,6 +5,11 @@ This directory contains examples for different operation modes of `llm-vcr-inter
 ## Common requirements
 Make sure you have your `.env` file configured with `LLM_API_KEY` and `LLM_BASE_URL`.
 
+## Transparent cassette behavior
+- Your application code stays unchanged: keep calling `service.generate(...)` or `model.invoke(...)`.
+- You do not call any explicit "record/save cassette" API in business code.
+- `LHIInterceptor.use_cassette()` creates one cassette boundary and automatically records/replays HTTP calls inside it.
+
 ## Running examples
 
 Use `uv run` to execute the scripts from the project root:
@@ -49,6 +54,6 @@ Use `uv run` to execute the scripts from the project root:
 
 ## Transparent vs advanced examples
 
-- `01_recorder.py`, `02_replayer.py`, `03_hybrid.py`, `05_langchain_basic.py` use transparent replay (no `invocation_context` required).
+- `01_recorder.py`, `02_replayer.py`, `03_hybrid.py`, `05_langchain_basic.py` use transparent replay (no `invocation_context` and no explicit record/save calls in business code).
 - `04_partial_replayer.py` shows callsite-based selective replay without explicit tags.
 - `quickstart.py` shows explicit named-step control with `invocation_context` and `ScenarioRow`.

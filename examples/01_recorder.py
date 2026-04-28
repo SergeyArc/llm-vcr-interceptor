@@ -6,7 +6,8 @@ from lhi import LHIInterceptor
 
 async def run_recorder() -> None:
     """Mode: Recorder (record_mode='all')
-    Always recording all interactions.
+    Transparent mode: business code calls stay unchanged.
+    Cassette records are written automatically inside use_cassette().
     """
     service = get_service()
     interceptor = LHIInterceptor(
@@ -16,7 +17,7 @@ async def run_recorder() -> None:
 
     async with service:
         with interceptor.use_cassette():
-            print("--- Recording calls to session_recorder.yaml ---")
+            print("--- Recorder: automatic cassette write to session_recorder.yaml ---")
             resp = await service.generate("What is 2+2?")
             print(f"Response: {resp}")
 

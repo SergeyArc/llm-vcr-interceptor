@@ -7,6 +7,7 @@ from lhi.interceptor import DEFAULT_CALLSITE_SKIP_PREFIXES
 
 async def run_partial_replayer() -> None:
     """Mode: Partial Replayer
+    No explicit cassette write/read calls in business code.
     Selective replay/live based on callsite-derived tag regex.
     """
     service = get_service()
@@ -33,7 +34,7 @@ async def run_partial_replayer() -> None:
 
     async with service:
         with interceptor.use_cassette():
-            print("--- Partial Replayer: selective matching by regex ---")
+            print("--- Partial Replayer: automatic cassette I/O + selective regex matching ---")
 
             # math_addition callsite matches regex -> replay if found
             print("Calling math_addition (matches regex)...")

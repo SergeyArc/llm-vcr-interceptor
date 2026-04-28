@@ -99,6 +99,11 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
+No explicit "save cassette" calls are needed in business code:
+- Keep application calls as-is (`client.chat.completions.create(...)`, `model.invoke(...)`).
+- Open one cassette boundary in test/dev harness with `interceptor.use_cassette()`.
+- Inside that boundary, HTTP traffic is intercepted automatically: first run writes cassette records, next runs replay them.
+
 Enable cassette mode in your test/dev harness:
 
 ```python

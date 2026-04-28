@@ -6,6 +6,7 @@ from lhi import LHIInterceptor
 
 async def run_hybrid() -> None:
     """Mode: Recorder + Replayer (record_mode='new_episodes')
+    Transparent mode: business code stays unchanged.
     Hybrid mode: use existing records, record anything new.
     """
     service = get_service()
@@ -16,7 +17,7 @@ async def run_hybrid() -> None:
 
     async with service:
         with interceptor.use_cassette():
-            print("--- Hybrid Mode: Replay existing + Record new ---")
+            print("--- Hybrid: automatic replay existing + auto-record new ---")
             # This should be replayed if in session_0.yaml
             resp1 = await service.generate("What is the Actor Model in one sentence?")
             print(f"Response 1: {resp1[:50]}...")

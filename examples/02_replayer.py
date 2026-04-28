@@ -6,6 +6,7 @@ from lhi import LHIInterceptor
 
 async def run_replayer() -> None:
     """Mode: Replayer (record_mode='none')
+    Transparent mode: no explicit replay/read calls in business code.
     Deterministic playback from an existing session.
     Fails if a match is not found.
     """
@@ -17,7 +18,7 @@ async def run_replayer() -> None:
 
     async with service:
         with interceptor.use_cassette():
-            print("--- Replaying calls from session_0.yaml ---")
+            print("--- Replayer: automatic cassette replay from session_0.yaml ---")
             try:
                 resp = await service.generate("What is the Actor Model in one sentence?")
                 print(f"Response (cached): {resp}")
