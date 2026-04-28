@@ -34,9 +34,15 @@ Use `uv run` to execute the scripts from the project root:
    uv run python examples/04_partial_replayer.py
    ```
 
+6. **LangChain Level A** (Framework call wrapped with `invocation_context`):
+   ```bash
+   uv run python examples/05_langchain_level_a.py
+   ```
+
 ## Modes overview
 
 - **Recorder**: All calls are recorded in a session file.
 - **Replayer**: All calls are read from a session file. No new interactions are allowed.
 - **Recorder + Replayer**: New calls are recorded, old ones are replayed. Helps incrementally build the test suite.
 - **Partial Replayer**: Use regex selectors on `invocation_tag` to define what should be replayed and what should go live.
+- **LangChain Level A**: Wrap the framework call with `invocation_context`; no native callback adapter is required.

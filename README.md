@@ -273,6 +273,42 @@ asyncio.run(main())
 
 ---
 
+## LangChain and LlamaIndex
+
+LangChain and LlamaIndex work without native adapters when their providers use regular HTTP clients under the hood. Keep `LHIInterceptor` at the cassette boundary and put `invocation_context()` around the framework call you want to cache.
+
+Install the LangChain OpenAI provider before running the example:
+
+```bash
+pip install langchain-openai
+```
+
+```python
+from langchain_openai import ChatOpenAI
+from lhi import LHIInterceptor, invocation_context
+
+model = ChatOpenAI(model="gpt-4o-mini")
+interceptor = LHIInterceptor(sessions={0: "langchain.yaml"})
+
+with interceptor.use_cassette():
+    with invocation_context("summarize_article"):
+        response = model.invoke("Summarize this article in one paragraph.")
+
+print(response.content)
+```
+
+For LlamaIndex use the same pattern around the query or workflow step:
+
+```python
+with interceptor.use_cassette():
+    with invocation_context("retrieve_answer"):
+        response = query_engine.query("What changed in the latest report?")
+```
+
+If one `chain.invoke()` performs several hidden LLM or embedding calls, split the workflow into explicit steps and give each step its own `invocation_context()`. This keeps cassette records stable and avoids framework-specific callback dependencies in the core package.
+
+---
+
 ## Examples
 
 Run the ready-made examples from the project root:
@@ -292,6 +328,9 @@ uv run python examples/03_hybrid.py
 
 # Partial replay by regex
 uv run python examples/04_partial_replayer.py
+
+# LangChain integration through invocation_context
+uv run python examples/05_langchain_level_a.py
 ```
 
 ---
