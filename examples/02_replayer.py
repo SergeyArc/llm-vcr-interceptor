@@ -1,7 +1,7 @@
 import asyncio
 
 from examples.utils import get_service
-from lhi import LHIInterceptor
+from lhi import LHIInterceptor, invocation_context
 
 
 async def run_replayer() -> None:
@@ -19,9 +19,8 @@ async def run_replayer() -> None:
         with interceptor.use_cassette():
             print("--- Replaying calls from session_0.yaml ---")
             try:
-                resp = await interceptor.generate(
-                    service, "What is the Actor Model in one sentence?", "actor_model_def"
-                )
+                with invocation_context("actor_model_def"):
+                    resp = await service.generate("What is the Actor Model in one sentence?")
                 print(f"Response (cached): {resp}")
             except Exception as e:
                 print(f"Error (expected if tag missing or live restricted): {e}")

@@ -6,29 +6,18 @@ import re
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
-from contextvars import ContextVar
 from functools import partial
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 import vcr
 import yaml
 
+from lhi.context import get_current_invocation_tag
 from lhi.scenario import ScenarioRow
 from lhi.session import AddRecords, AddSession, RemoveRecords
 
 INVOCATION_TAG_HEADER = "x-invocation-tag"
-
-
-class _AsyncTextGenerator(Protocol):
-    async def generate(self, prompt: str) -> str: ...
-
-
-_current_tag: ContextVar[str | None] = ContextVar("lhi_tag", default=None)
-
-
-def get_current_invocation_tag() -> str | None:
-    return _current_tag.get()
 
 
 def _header_first(request: Any, name: str) -> str:
@@ -183,7 +172,7 @@ def _build_virtual_cassette_file(
 
 def _make_invocation_tag_matcher(scenario: ScenarioRow | None) -> Any:
     def lhi_invocation_tag_matcher(r1: Any, r2: Any) -> None:
-        incoming = _header_first(r1, INVOCATION_TAG_HEADER) or (_current_tag.get() or "")
+        incoming = _header_first(r1, INVOCATION_TAG_HEADER) or (get_current_invocation_tag() or "")
         stored = _header_first(r2, INVOCATION_TAG_HEADER)
         if scenario is not None and scenario.invocation_patch_regexps:
             if not any(re.search(pattern, incoming) for pattern in scenario.invocation_patch_regexps):
@@ -201,7 +190,7 @@ def _make_invocation_tag_matcher(scenario: ScenarioRow | None) -> Any:
 
 
 def _inject_invocation_tag_header(request: Any) -> Any:
-    tag = _current_tag.get()
+    tag = get_current_invocation_tag()
     if tag:
         request.headers[INVOCATION_TAG_HEADER] = tag
     return request
@@ -324,10 +313,3 @@ class LHIInterceptor:
         finally:
             if self._virtual_cassette_path:
                 self._sync_new_interactions_to_primary(previous_count)
-
-    async def generate(self, service: _AsyncTextGenerator, prompt: str, invocation_tag: str) -> str:
-        token = _current_tag.set(invocation_tag)
-        try:
-            return await service.generate(prompt)
-        finally:
-            _current_tag.reset(token)

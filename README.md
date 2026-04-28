@@ -6,6 +6,7 @@
 
 - [`lhi/session.py`](lhi/session.py): доменные модели сессий и операций правки (`Session`, `AddSession`, `AddRecords`, `RemoveRecords`) для управления составом воспроизводимых записей.
 - [`lhi/scenario.py`](lhi/scenario.py): описание сценария `ScenarioRow` (regex по `invocation_tag` + набор `edits`), который определяет правила выбора и модификации кассет.
+- [`lhi/context.py`](lhi/context.py): управление контекстом `invocation_tag` (`invocation_context`, `get_current_invocation_tag`) как единый источник тега для matcher и инжекта заголовка.
 - [`lhi/interceptor.py`](lhi/interceptor.py): реализация `LHIInterceptor` — инжект `X-Invocation-Tag`, matcher по тегу, виртуальное объединение кассет и синхронизация новых взаимодействий в primary-сессию.
 - [`lhi/__init__.py`](lhi/__init__.py): публичный API модуля (`__all__`) для удобного импорта основных сущностей.
 
@@ -15,10 +16,11 @@
 - **`invocation_tag`** — уникальный тег конкретного LLM-вызова; прокидывается в заголовок `X-Invocation-Tag`, используется в matcher для выбора точной записи из кассеты и в `ScenarioRow.invocation_patch_regexps` для активации сценария.
 
 Когда проставляется `invocation_tag`:
-- тег задаётся явно при вызове `interceptor.generate(service, prompt, invocation_tag)`;
-- внутри `LHIInterceptor.generate(...)` он помещается в локальный контекст на время запроса;
-- в `before_record_request` тег автоматически добавляется в исходящий HTTP-запрос как `X-Invocation-Tag`;
-- после завершения `service.generate(...)` тег сбрасывается.
+- рекомендуемый путь: через `with invocation_context("tag"):` вокруг обычного вызова SDK/клиента;
+- backward-compatible путь: через `interceptor.generate(service, prompt, invocation_tag)`;
+- внутри контекста тег хранится в `ContextVar` на время запроса;
+- в `before_record_request` (встроенный хук VCR.py) тег автоматически добавляется в исходящий HTTP-запрос как `X-Invocation-Tag`;
+- после выхода из контекста тег сбрасывается.
 
 **Важно:** `llm_actor` выполняет HTTP в воркерах пула, поэтому тег передаётся через `_pending_invocation_tag` под `asyncio.Lock` на время `await service.generate()`, а не через `ContextVar`.
 
@@ -42,6 +44,25 @@
 4. Если тег совпал с regex, но записи в кассете нет:
    - `new_episodes`/`all`: выполняется live-запрос с последующей записью,
    - `none`: ошибка из-за отсутствия подходящей записи.
+
+## Интеграция без правок SDK
+
+Рекомендуемый паттерн для стандартных SDK и кастомных LLM-клиентов:
+1. Обернуть участок работы в `with interceptor.use_cassette():`.
+2. Перед конкретным вызовом поставить `invocation_tag` через `with invocation_context("..."):`.
+3. Выполнить обычный вызов SDK/клиента.
+
+Минимальный пример:
+
+```python
+with interceptor.use_cassette():
+    with invocation_context("actor_model_def"):
+        response = await service.generate("What is the Actor Model in one sentence?")
+```
+
+Ограничения:
+- текущий механизм рассчитан на HTTP-перехват через VCR;
+- gRPC-based SDK (часть сценариев Gemini/Vertex AI) не покрываются этим путём и требуют отдельного interceptor-слоя.
 
 ## Запуск
 

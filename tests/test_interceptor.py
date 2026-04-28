@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from lhi.context import get_current_invocation_tag, invocation_context
 from lhi.interceptor import (
     INVOCATION_TAG_HEADER,
     _collect_remove_patterns,
@@ -217,3 +219,29 @@ def test_write_and_load_cassette_document_round_trip(tmp_path: Path) -> None:
     assert loaded["version"] == 1
     assert len(loaded["interactions"]) == 1
     assert _invocation_tag_from_interaction(loaded["interactions"][0]) == "t1"
+
+
+def test_invocation_context_sets_and_resets_tag() -> None:
+    assert get_current_invocation_tag() is None
+    with invocation_context("tag-1"):
+        assert get_current_invocation_tag() == "tag-1"
+    assert get_current_invocation_tag() is None
+
+
+@pytest.mark.asyncio
+async def test_invocation_context_concurrent_tags_are_isolated() -> None:
+    async def read_tag(tag: str, delay: float) -> str | None:
+        with invocation_context(tag):
+            await asyncio.sleep(delay)
+            return get_current_invocation_tag()
+
+    first_tag, second_tag = await asyncio.gather(
+        read_tag("alpha", 0.01),
+        read_tag("beta", 0.01),
+    )
+
+    assert first_tag == "alpha"
+    assert second_tag == "beta"
+    assert get_current_invocation_tag() is None
+
+

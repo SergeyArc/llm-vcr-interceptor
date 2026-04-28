@@ -1,7 +1,7 @@
 import asyncio
 
 from examples.utils import get_service
-from lhi import LHIInterceptor, ScenarioRow
+from lhi import LHIInterceptor, ScenarioRow, invocation_context
 
 
 async def run_partial_replayer() -> None:
@@ -29,12 +29,14 @@ async def run_partial_replayer() -> None:
 
             # This tag "math_addition" MATCHES the regex -> will be replayed if found
             print("Calling math_addition (matches regex)...")
-            resp1 = await interceptor.generate(service, "What is 5 + 7?", "math_addition")
+            with invocation_context("math_addition"):
+                resp1 = await service.generate("What is 5 + 7?")
             print(f"Response 1: {resp1}")
 
             # This tag "general_q" DOES NOT match the regex -> forces live call
             print("\nCalling general_q (doesn't match regex) -> FORCING LIVE REQUEST")
-            resp2 = await interceptor.generate(service, "What is the capital of France?", "general_q")
+            with invocation_context("general_q"):
+                resp2 = await service.generate("What is the capital of France?")
             print(f"Response 2: {resp2}")
 
 
