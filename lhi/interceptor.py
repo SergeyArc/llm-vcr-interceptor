@@ -17,6 +17,7 @@ import yaml
 from lhi.context import get_current_invocation_tag
 from lhi.scenario import ScenarioRow
 from lhi.session import AddRecords, AddSession, RemoveRecords, Session
+from lhi.streaming import apply_replay_streaming_shim, normalize_streaming_response
 
 INVOCATION_TAG_HEADER = "x-invocation-tag"
 _virtual_cassette_paths: set[Path] = set()
@@ -224,6 +225,25 @@ def _inject_invocation_tag_header(request: Any) -> Any:
     return request
 
 
+@contextmanager
+def _httpcore_replay_shim() -> Iterator[None]:
+    import vcr.stubs.httpcore_stubs as httpcore_stubs  # type: ignore[import-untyped]
+
+    original_play_responses = httpcore_stubs._play_responses
+    deserialize_response = httpcore_stubs._deserialize_response
+
+    def _play_responses_with_shim(cassette: Any, vcr_request: Any) -> Any:
+        vcr_response = cassette.play_response(vcr_request)
+        real_response = deserialize_response(vcr_response)
+        return apply_replay_streaming_shim(vcr_response, real_response)
+
+    httpcore_stubs._play_responses = _play_responses_with_shim
+    try:
+        yield
+    finally:
+        httpcore_stubs._play_responses = original_play_responses
+
+
 class LHIInterceptor:
     """Interceptor: invocation_tag in ContextVar + VCR matcher by X-Invocation-Tag header."""
 
@@ -275,6 +295,7 @@ class LHIInterceptor:
             cassette_library_dir=self._cassette_library_dir,
             record_mode=self._record_mode,
             before_record_request=_inject_invocation_tag_header,
+            before_record_response=normalize_streaming_response,
             filter_headers=(
                 "authorization",
                 "api-key",
@@ -363,7 +384,7 @@ class LHIInterceptor:
                 _load_cassette_document(Path(self._virtual_cassette_path)).get("interactions") or [],
             )
         try:
-            with self._vcr.use_cassette(self._cassette_name):
+            with _httpcore_replay_shim(), self._vcr.use_cassette(self._cassette_name):
                 yield
         finally:
             if self._virtual_cassette_path:

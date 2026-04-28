@@ -335,6 +335,14 @@ uv run python examples/05_langchain_level_a.py
 
 ---
 
+## Streaming (SSE)
+
+- `text/event-stream` responses are normalized to a full body before cassette write.
+- On replay, the stream is served with cursor-safe chunk iteration to avoid restarting from the beginning.
+- SSE chunks are emitted by event boundary (`\n\n`) for deterministic event parsing.
+
+---
+
 ## API Reference
 
 | Object | Description |
@@ -354,6 +362,7 @@ Environment variables:
 |----------|---------|-------------|
 | `VCR_CASSETTES_DIR` | `cassettes` | Directory for cache files |
 | `VCR_RECORD_MODE` | `new_episodes` | Recording mode |
+| `LHI_STREAM_MAX_BODY_BYTES` | `10485760` | Max SSE body size to normalize into cassette |
 
 ---
 
@@ -361,6 +370,8 @@ Environment variables:
 
 - Works with HTTP traffic only (OpenAI, Anthropic, Mistral, and other REST APIs).
 - gRPC clients are not supported.
+- SSE replay preserves event content/order but not original timing between events.
+- SSE normalization is limited to 10 MiB by default (override via `LHI_STREAM_MAX_BODY_BYTES`).
 
 ---
 
@@ -378,11 +389,3 @@ uv run pytest
 - `lhi/scenario.py` — `ScenarioRow`: selective replay rules.
 - `lhi/session.py` — `Session`, `AddSession`, `AddRecords`, `RemoveRecords`.
 - `lhi/context.py` — `invocation_context`, `get_current_invocation_tag`.
-
-### Publishing
-
-1. Check name availability: `pip index versions llm-vcr-interceptor`
-2. Bump version in `lhi/__init__.py`
-3. Build: `uv build`
-4. Validate: `uv run twine check dist/*`
-5. Publish: `uv run twine upload dist/*`

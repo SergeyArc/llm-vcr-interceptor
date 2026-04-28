@@ -17,7 +17,12 @@ def make_http_interaction(
     method: str = "GET",
     status_code: int = 200,
     body: str = '{"source":"cassette"}',
+    content_type: str = "application/json",
+    response_headers: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
+    headers = {"Content-Type": [content_type]}
+    if response_headers:
+        headers.update(response_headers)
     return {
         "request": {
             "body": "",
@@ -29,7 +34,7 @@ def make_http_interaction(
         },
         "response": {
             "body": {"string": body},
-            "headers": {"Content-Type": ["application/json"]},
+            "headers": headers,
             "status": {"code": status_code, "message": "OK"},
         },
     }

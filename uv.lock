@@ -519,7 +519,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9" },
     { name = "twine", marker = "extra == 'dev'", specifier = ">=6.1.0" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
-    { name = "vcrpy", specifier = ">=8.1.1" },
+    { name = "vcrpy", specifier = ">=8.1.1,<9" },
 ]
 provides-extras = ["dev"]
 
