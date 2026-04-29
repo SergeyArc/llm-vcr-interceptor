@@ -8,6 +8,8 @@ Cache LLM API responses and replay them instantly — save money and time when i
 
 Every time you develop or debug a pipeline that calls an LLM, you pay for the same requests over and over. This package records model responses once, then replays them instantly — no API calls needed.
 
+It is designed to be wired into development and test scripts, so your production code does not need to change.
+
 **Typical scenario:** you have a 10-step pipeline. You're iterating on step 8. Steps 1–7 are already working — no need to run them every time.
 
 ---
