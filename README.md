@@ -10,7 +10,16 @@ Every time you develop or debug a pipeline that calls an LLM, you pay for the sa
 
 It is designed to be wired into development and test scripts, so your production code does not need to change.
 
-**Typical scenario:** you have a 10-step pipeline. You're iterating on step 8. Steps 1–7 are already working — no need to run them every time.
+**Typical scenario:** you have a 10-step pipeline. You're iterating on step 8. In your dev/test script, you run the pipeline with recorded responses for steps 1–7, so only the code you're changing needs attention.
+
+## Choose a mode
+
+| Mode | When to use | `record_mode` |
+|------|-------------|---------------|
+| **Recorder** | First run — record all responses | `"all"` |
+| **Replayer** | Testing, CI/CD — no live requests allowed | `"none"` |
+| **Hybrid** (default) | Development — cached responses reused, new ones recorded | `"new_episodes"` |
+| **Partial Replayer** | Freeze some steps, let others hit the real API | `ScenarioRow` |
 
 ---
 
@@ -129,14 +138,7 @@ def lhi_session():
 
 ---
 
-## Choose a mode
-
-| Mode | When to use | `record_mode` |
-|------|-------------|---------------|
-| **Recorder** | First run — record all responses | `"all"` |
-| **Replayer** | Testing, CI/CD — no live requests allowed | `"none"` |
-| **Hybrid** (default) | Development — cached responses reused, new ones recorded | `"new_episodes"` |
-| **Partial Replayer** | Freeze some steps, let others hit the real API | `ScenarioRow` |
+## Mode details
 
 ### Recorder (`record_mode="all"`)
 
