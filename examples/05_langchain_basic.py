@@ -1,13 +1,7 @@
 from __future__ import annotations
 
-import os
-
+from examples.utils import get_llm_api_key, get_llm_base_url, get_llm_model_name, load_llm_environment
 from lhi import LHIInterceptor
-
-try:
-    from dotenv import load_dotenv
-except ImportError:
-    load_dotenv = None
 
 
 def run_langchain_basic() -> None:
@@ -23,12 +17,11 @@ def run_langchain_basic() -> None:
         msg = "Install optional dependencies first: pip install langchain-openai"
         raise SystemExit(msg) from exc
 
-    if load_dotenv is not None:
-        load_dotenv()
+    load_llm_environment()
     model = ChatOpenAI(
-        model=os.environ.get("LLM_MODEL_NAME", "gpt-4o-mini"),
-        api_key=os.environ.get("LLM_API_KEY"),
-        base_url=os.environ.get("LLM_BASE_URL"),
+        model=get_llm_model_name(),
+        api_key=get_llm_api_key(),
+        base_url=get_llm_base_url(),
     )
     interceptor = LHIInterceptor(
         sessions={0: "session_langchain.yaml"},

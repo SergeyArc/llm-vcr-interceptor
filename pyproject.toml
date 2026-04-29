@@ -24,6 +24,7 @@ classifiers = [
 ]
 dependencies = [
     "openai>=1.0.0",
+    "python-dotenv>=1.2.2",
     "pyyaml>=6.0.3",
     "vcrpy>=8.1.1,<9",
 ]
