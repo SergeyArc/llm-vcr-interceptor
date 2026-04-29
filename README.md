@@ -99,6 +99,8 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
+For existing applications, production code usually does not need cassette-specific changes. Add cassette boundaries in tests, fixtures, or dev/CLI scripts.
+
 No explicit "save cassette" calls are needed in business code:
 - Keep application calls as-is (`client.chat.completions.create(...)`, `model.invoke(...)`).
 - Open one cassette boundary in test/dev harness with `interceptor.use_cassette()`.
@@ -176,7 +178,7 @@ from lhi import LHIInterceptor, ScenarioRow
 from lhi.interceptor import DEFAULT_CALLSITE_SKIP_PREFIXES
 
 # Calls emitted from preprocess_step1() are served from cache.
-# Everything else hits the real API.
+# Everything else is live passthrough and is not recorded into this cassette.
 scenario = ScenarioRow(
     name="freeze_preprocessing",
     invocation_patch_regexps=(r"^callsite:pipeline/preprocess.py:preprocess_step1:.*",),
@@ -201,6 +203,8 @@ with interceptor.use_cassette():
     preprocess_step1()  # served from cache
     generate_report()  # real API call
 ```
+
+In `record_mode="new_episodes"` with `ScenarioRow`, calls outside `invocation_patch_regexps` remain live and are skipped during cassette write. This keeps partial sessions focused on frozen steps and prevents non-matching duplicates from accumulating.
 
 `invocation_context()` remains an advanced API for explicit named control (`ScenarioRow`, `AddRecords`, `RemoveRecords`). In `identity_strategy="callsite"` you can use selective replay without wrapping each call.
 

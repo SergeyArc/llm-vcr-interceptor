@@ -6,9 +6,13 @@ This directory contains examples for different operation modes of `llm-vcr-inter
 Make sure you have your `.env` file configured with `LLM_API_KEY` and `LLM_BASE_URL`.
 
 ## Transparent cassette behavior
-- Your application code stays unchanged: keep calling `service.generate(...)` or `model.invoke(...)`.
+- Your application code stays unchanged: keep calling your app-level service API (`knowledge_service.explain_topic(...)`) or `model.invoke(...)`.
 - You do not call any explicit "record/save cassette" API in business code.
 - `LHIInterceptor.use_cassette()` creates one cassette boundary and automatically records/replays HTTP calls inside it.
+
+## Layer split in this directory
+- `service.py` emulates existing production application code (contains `KnowledgeService` and env helpers, but no `lhi` imports).
+- Example scripts (`01_*.py`, `02_*.py`, `03_*.py`, `04_*.py`, `05_*.py`, `quickstart.py`) act as test/dev harness, create `LHIInterceptor`, and add cassette boundaries with `interceptor.use_cassette()`.
 
 ## Running examples
 
@@ -49,7 +53,7 @@ Use `uv run` to execute the scripts from the project root:
 - **Recorder**: All calls are recorded in a session file.
 - **Replayer**: All calls are read from a session file. No new interactions are allowed.
 - **Recorder + Replayer**: New calls are recorded, old ones are replayed. Helps incrementally build the test suite.
-- **Partial Replayer**: Use regex selectors on `invocation_tag` to define what should be replayed and what should go live.
+- **Partial Replayer**: Use regex selectors on `invocation_tag` to define what should be replayed; non-matching calls stay live passthrough and are not recorded into this cassette.
 - **LangChain Basic**: Keep replay transparent; only cassette boundary is required.
 
 ## Transparent vs advanced examples

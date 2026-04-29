@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import asyncio
 
-from examples.utils import get_service
+from examples.service import get_knowledge_service
 from lhi import LHIInterceptor, ScenarioRow, invocation_context
 
 
 async def main() -> None:
-    service = get_service()
+    knowledge_service = get_knowledge_service()
     scenario = ScenarioRow(
         name="freeze_actor_model",
         invocation_patch_regexps=(r"^actor_model_(def|example)$",),
@@ -18,20 +18,16 @@ async def main() -> None:
     )
 
     with interceptor.use_cassette():
-        async with service:
-            async def call_with_tag(prompt: str, invocation_tag: str) -> str:
+        async with knowledge_service:
+            async def call_with_tag(invocation_tag: str) -> str:
                 with invocation_context(invocation_tag):
-                    return await service.generate(prompt)
+                    if invocation_tag == "actor_model_def":
+                        return await knowledge_service.explain_topic("Actor Model")
+                    return await knowledge_service.name_language_using_topic("Actor Model")
 
             first_response, second_response = await asyncio.gather(
-                call_with_tag(
-                    "What is the Actor Model in one sentence?",
-                    "actor_model_def",
-                ),
-                call_with_tag(
-                    "Name one language that uses the Actor Model.",
-                    "actor_model_example",
-                ),
+                call_with_tag("actor_model_def"),
+                call_with_tag("actor_model_example"),
             )
             print(f"Response 1: {first_response}\n")
             print(f"Response 2: {second_response}\n")

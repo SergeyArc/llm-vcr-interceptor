@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from examples.utils import get_llm_api_key, get_llm_base_url, get_llm_model_name, load_llm_environment
+from examples.service import get_llm_api_key, get_llm_base_url, get_llm_model_name, load_llm_environment
 from lhi import LHIInterceptor
 
 

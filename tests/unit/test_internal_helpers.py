@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+from lhi.context import invocation_context
 from lhi.interceptor import (
     DEFAULT_CALLSITE_SKIP_PREFIXES,
     INVOCATION_TAG_HEADER,
@@ -165,12 +166,61 @@ def test_make_before_record_request_hook_idempotent_when_tag_exists() -> None:
         headers = {INVOCATION_TAG_HEADER: "existing"}
 
     hook = _make_before_record_request_hook(
+        scenario=None,
+        record_mode="none",
         identity_strategy="callsite",
         callsite_skip_prefixes=DEFAULT_CALLSITE_SKIP_PREFIXES,
         callsite_project_root=str(Path.cwd()),
     )
     result = hook(Request())
     assert result.headers[INVOCATION_TAG_HEADER] == "existing"
+
+
+def test_make_before_record_request_hook_filters_non_matching_scenario_tag() -> None:
+    class Request:
+        method = "POST"
+        uri = "http://example.com/partial"
+        body = b'{"messages":[{"role":"user","content":"What is the capital of France?"}]}'
+        headers: dict[str, str] = {}
+
+    scenario = ScenarioRow(
+        name="math_only",
+        invocation_patch_regexps=(r"callsite:.*:callsite_math:.*",),
+    )
+    hook = _make_before_record_request_hook(
+        scenario=scenario,
+        record_mode="new_episodes",
+        identity_strategy="explicit_first",
+        callsite_skip_prefixes=DEFAULT_CALLSITE_SKIP_PREFIXES,
+        callsite_project_root=str(Path.cwd()),
+    )
+    with invocation_context("callsite:tests/example.py:callsite_general:deadbeef"):
+        result = hook(Request())
+    assert result is None
+
+
+def test_make_before_record_request_hook_keeps_request_for_empty_tag_fallback() -> None:
+    class Request:
+        method = "POST"
+        uri = "http://example.com/fallback"
+        body = b'{"messages":[{"role":"user","content":"hello"}]}'
+        headers: dict[str, str] = {}
+
+    scenario = ScenarioRow(
+        name="math_only",
+        invocation_patch_regexps=(r"callsite:.*:callsite_math:.*",),
+    )
+    hook = _make_before_record_request_hook(
+        scenario=scenario,
+        record_mode="new_episodes",
+        identity_strategy="callsite",
+        callsite_skip_prefixes=("",),
+        callsite_project_root=str(Path.cwd()),
+    )
+    request = Request()
+    result = hook(request)
+    assert result is request
+    assert result.headers == {}
 
 
 def test_derive_callsite_tag_returns_empty_when_no_app_frame() -> None:

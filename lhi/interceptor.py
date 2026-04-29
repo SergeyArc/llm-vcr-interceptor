@@ -370,6 +370,8 @@ def _is_loading_cassette() -> bool:
 
 def _make_before_record_request_hook(
     *,
+    scenario: ScenarioRow | None,
+    record_mode: str,
     identity_strategy: IdentityStrategy,
     callsite_skip_prefixes: tuple[str, ...],
     callsite_project_root: str | None,
@@ -395,7 +397,11 @@ def _make_before_record_request_hook(
                     "falling back to fingerprint matching",
                 )
         if tag:
-            return _copy_request_with_header(request, INVOCATION_TAG_HEADER, tag)
+            request_with_tag = _copy_request_with_header(request, INVOCATION_TAG_HEADER, tag)
+            if record_mode != "none" and scenario is not None and scenario.invocation_patch_regexps:
+                if not any(re.search(pattern, tag) for pattern in scenario.invocation_patch_regexps):
+                    return None
+            return request_with_tag
         return request
 
     return _inject_invocation_tag_header
@@ -474,6 +480,8 @@ class LHIInterceptor:
 
     def _build_vcr(self) -> vcr.VCR:
         before_record_request_hook = _make_before_record_request_hook(
+            scenario=self._scenario,
+            record_mode=self._record_mode,
             identity_strategy=self._identity_strategy,
             callsite_skip_prefixes=self._callsite_skip_prefixes,
             callsite_project_root=self._callsite_project_root,
@@ -483,6 +491,9 @@ class LHIInterceptor:
             record_mode=self._record_mode,
             before_record_request=before_record_request_hook,
             before_record_response=normalize_streaming_response,
+            # In record_mode="all", old interactions are never replayed.
+            # Dropping unused requests makes saves overwrite previous runs instead of appending.
+            drop_unused_requests=self._record_mode == "all",
             filter_headers=(
                 "authorization",
                 "api-key",
@@ -563,9 +574,17 @@ class LHIInterceptor:
             recorded_at=_current_recorded_at(),
         )
 
+    def _reset_primary_cassette_for_record_all(self) -> None:
+        if self._record_mode != "all" or self._virtual_cassette_path:
+            return
+        primary_rel = self._sessions[self._primary_session_id]
+        primary_path = Path(self._base_library_dir) / primary_rel
+        primary_path.unlink(missing_ok=True)
+
     @contextmanager
     def use_cassette(self) -> Iterator[None]:
         previous_count = 0
+        self._reset_primary_cassette_for_record_all()
         if self._virtual_cassette_path:
             previous_count = len(
                 _load_cassette_document(Path(self._virtual_cassette_path)).get("interactions") or [],

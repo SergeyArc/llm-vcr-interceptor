@@ -1,6 +1,6 @@
 import asyncio
 
-from examples.utils import get_service
+from examples.service import get_knowledge_service
 from lhi import LHIInterceptor, ScenarioRow
 from lhi.interceptor import DEFAULT_CALLSITE_SKIP_PREFIXES
 
@@ -10,13 +10,13 @@ async def run_partial_replayer() -> None:
     No explicit cassette write/read calls in business code.
     Selective replay/live based on callsite-derived tag regex.
     """
-    service = get_service()
+    knowledge_service = get_knowledge_service()
 
     async def math_addition() -> str:
-        return await service.generate("What is 5 + 7?")
+        return await knowledge_service.answer_math_question("What is 5 + 7?")
 
     async def general_q() -> str:
-        return await service.generate("What is the capital of France?")
+        return await knowledge_service.answer_question("What is the capital of France?")
 
     # Replay only requests emitted from math_addition callsite.
     scenario = ScenarioRow(
@@ -29,10 +29,10 @@ async def run_partial_replayer() -> None:
         scenario=scenario,
         record_mode="new_episodes",
         identity_strategy="callsite",
-        callsite_skip_prefixes=(*DEFAULT_CALLSITE_SKIP_PREFIXES, "examples.utils"),
+        callsite_skip_prefixes=(*DEFAULT_CALLSITE_SKIP_PREFIXES, "examples.service"),
     )
 
-    async with service:
+    async with knowledge_service:
         with interceptor.use_cassette():
             print("--- Partial Replayer: automatic cassette I/O + selective regex matching ---")
 
@@ -41,7 +41,7 @@ async def run_partial_replayer() -> None:
             resp1 = await math_addition()
             print(f"Response 1: {resp1}")
 
-            # general_q callsite does not match -> forces live request in new_episodes mode
+            # general_q callsite does not match -> forced live passthrough (not recorded in this cassette)
             print("\nCalling general_q (doesn't match regex) -> FORCING LIVE REQUEST")
             resp2 = await general_q()
             print(f"Response 2: {resp2}")

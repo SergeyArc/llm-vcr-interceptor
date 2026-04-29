@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import threading
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import httpx
 import pytest
@@ -11,6 +14,35 @@ from vcr.errors import CannotOverwriteExistingCassetteException
 from lhi import LHIInterceptor
 from lhi.context import invocation_context
 from lhi.interceptor import DEFAULT_CALLSITE_SKIP_PREFIXES, _derive_callsite_tag
+
+
+@contextmanager
+def _serve_json_response(response_body: str) -> Iterator[str]:
+    class _Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers.get("Content-Length", "0"))
+            if length:
+                _ = self.rfile.read(length)
+            encoded = response_body.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address
+    try:
+        yield f"http://{host}:{port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=1)
 
 
 def _send_loop_request(
@@ -381,4 +413,60 @@ def test_callsite_same_prompt_produces_same_tag() -> None:
     )
     assert isinstance(first_tag, str)
     assert isinstance(second_tag, str)
+    assert first_tag == second_tag
+
+
+def test_partial_new_episodes_non_matching_calls_are_live_but_not_recorded(
+    tmp_path: Path,
+    read_cassette_fixture: Any,
+) -> None:
+    callsite_skip_prefixes = (*DEFAULT_CALLSITE_SKIP_PREFIXES, "tests.conftest")
+
+    def callsite_math(url: str) -> httpx.Response:
+        payload = {"messages": [{"role": "user", "content": "What is 5 + 7?"}]}
+        return httpx.post(url, json=payload, timeout=2.0)
+
+    def callsite_general(url: str) -> httpx.Response:
+        payload = {"messages": [{"role": "user", "content": "What is the capital of France?"}]}
+        return httpx.post(url, json=payload, timeout=2.0)
+
+    from lhi import ScenarioRow
+
+    scenario = ScenarioRow(
+        name="math_only",
+        invocation_patch_regexps=(r"callsite:.*:callsite_math:.*",),
+    )
+    interceptor = LHIInterceptor(
+        sessions={0: "session.yaml"},
+        cassette_library_dir=str(tmp_path),
+        record_mode="new_episodes",
+        scenario=scenario,
+        identity_strategy="callsite",
+        callsite_skip_prefixes=callsite_skip_prefixes,
+        callsite_project_root=str(Path.cwd()),
+    )
+    cassette_path = tmp_path / "session.yaml"
+
+    with _serve_json_response('{"answer":"live"}') as base_url:
+        partial_url = f"{base_url}/partial"
+        with interceptor.use_cassette():
+            math_response = callsite_math(partial_url)
+            general_response = callsite_general(partial_url)
+            assert math_response.status_code == 200
+            assert general_response.status_code == 200
+
+        first_interactions = read_cassette_fixture(cassette_path)["interactions"]
+        assert len(first_interactions) == 1
+        first_tag = first_interactions[0]["request"]["headers"]["x-invocation-tag"][0]
+        assert "callsite_math" in first_tag
+
+        with interceptor.use_cassette():
+            math_response = callsite_math(partial_url)
+            general_response = callsite_general(partial_url)
+            assert math_response.status_code == 200
+            assert general_response.status_code == 200
+
+    second_interactions = read_cassette_fixture(cassette_path)["interactions"]
+    assert len(second_interactions) == 1
+    second_tag = second_interactions[0]["request"]["headers"]["x-invocation-tag"][0]
     assert first_tag == second_tag

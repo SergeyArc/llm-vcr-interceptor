@@ -1,6 +1,6 @@
 import asyncio
 
-from examples.utils import get_service
+from examples.service import get_knowledge_service
 from lhi import LHIInterceptor
 
 
@@ -9,21 +9,21 @@ async def run_hybrid() -> None:
     Transparent mode: business code stays unchanged.
     Hybrid mode: use existing records, record anything new.
     """
-    service = get_service()
+    knowledge_service = get_knowledge_service()
     interceptor = LHIInterceptor(
         sessions={0: "session_0.yaml"},
         record_mode="new_episodes",  # Default mode
     )
 
-    async with service:
+    async with knowledge_service:
         with interceptor.use_cassette():
             print("--- Hybrid: automatic replay existing + auto-record new ---")
             # This should be replayed if in session_0.yaml
-            resp1 = await service.generate("What is the Actor Model in one sentence?")
+            resp1 = await knowledge_service.explain_topic("Actor Model")
             print(f"Response 1: {resp1[:50]}...")
 
             # This will be RECORDED to session_0.yaml if it's new
-            resp2 = await service.generate("Translate 'Hello' to French.")
+            resp2 = await knowledge_service.translate_text("Hello", "French")
             print(f"Response 2 (newly recorded or replayed): {resp2}")
 
 
